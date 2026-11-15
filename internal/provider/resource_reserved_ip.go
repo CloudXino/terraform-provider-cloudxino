@@ -184,17 +184,19 @@ func (r *reservedIPResource) ImportState(ctx context.Context, req resource.Impor
 type reservedIPAssignmentResource struct{ resourceBase }
 
 type reservedIPAssignmentModel struct {
-	ID           types.String `tfsdk:"id"`
-	ReservedIPID types.String `tfsdk:"reserved_ip_id"`
-	ServerID     types.String `tfsdk:"server_id"`
-	IPAddress    types.String `tfsdk:"ip_address"`
+	ID             types.String `tfsdk:"id"`
+	ReservedIPID   types.String `tfsdk:"reserved_ip_id"`
+	ServerID       types.String `tfsdk:"server_id"`
+	LoadBalancerID types.String `tfsdk:"load_balancer_id"`
+	IPAddress      types.String `tfsdk:"ip_address"`
 }
 
 func newReservedIPAssignmentResource() resource.Resource { return &reservedIPAssignmentResource{} }
 
 var (
-	_ resource.ResourceWithConfigure   = (*reservedIPAssignmentResource)(nil)
-	_ resource.ResourceWithImportState = (*reservedIPAssignmentResource)(nil)
+	_ resource.ResourceWithConfigure        = (*reservedIPAssignmentResource)(nil)
+	_ resource.ResourceWithImportState      = (*reservedIPAssignmentResource)(nil)
+	_ resource.ResourceWithConfigValidators = (*reservedIPAssignmentResource)(nil)
 )
 
 func (r *reservedIPAssignmentResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -203,9 +205,11 @@ func (r *reservedIPAssignmentResource) Metadata(_ context.Context, req resource.
 
 func (r *reservedIPAssignmentResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Points a `cloudxino_reserved_ip` at a CC2 server. Kept apart from the reserved IP so the " +
-			"address stays the team's when the server is replaced: the assignment moves to the new server. " +
-			"Destroying it unassigns the address (the reserved IP itself stays).",
+		Description: "Points a `cloudxino_reserved_ip` at a CC2 server or a CC2 load balancer (exactly one of " +
+			"`server_id`, `load_balancer_id`). Kept apart from the reserved IP so the address stays the team's " +
+			"when the target is replaced: the assignment moves to the new one. Destroying it unassigns the " +
+			"address (the reserved IP itself stays). A CKS LoadBalancer Service asks for a reserved IP with " +
+			"its own annotation `cloudxino.com/reserved-ip: <address>` instead.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed: true, PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
@@ -216,8 +220,13 @@ func (r *reservedIPAssignmentResource) Schema(_ context.Context, _ resource.Sche
 				Description: "ID of the `cloudxino_reserved_ip`.",
 			},
 			"server_id": schema.StringAttribute{
-				Required:    true,
+				Optional:    true,
 				Description: "ID of a `cloudxino_server` in the reserved IP's region. Changing it moves the address without a gap.",
+			},
+			"load_balancer_id": schema.StringAttribute{
+				Optional: true,
+				Description: "ID of a `cloudxino_load_balancer` in the reserved IP's region: its forwarding rules answer " +
+					"on the reserved address too. Changing it moves the address without a gap.",
 			},
 			"ip_address": schema.StringAttribute{
 				Computed: true, PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
@@ -227,11 +236,55 @@ func (r *reservedIPAssignmentResource) Schema(_ context.Context, _ resource.Sche
 	}
 }
 
+func (r *reservedIPAssignmentResource) ConfigValidators(context.Context) []resource.ConfigValidator {
+	return []resource.ConfigValidator{exactlyOneTarget{}}
+}
+
+// exactlyOneTarget: server_id or load_balancer_id, not both, not neither.
+type exactlyOneTarget struct{}
+
+func (exactlyOneTarget) Description(context.Context) string {
+	return "exactly one of server_id, load_balancer_id"
+}
+
+func (v exactlyOneTarget) MarkdownDescription(ctx context.Context) string { return v.Description(ctx) }
+
+func (exactlyOneTarget) ValidateResource(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var server, lb types.String
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("server_id"), &server)...)
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("load_balancer_id"), &lb)...)
+	if resp.Diagnostics.HasError() || server.IsUnknown() || lb.IsUnknown() {
+		return
+	}
+	if server.IsNull() == lb.IsNull() {
+		resp.Diagnostics.AddError("Invalid reserved IP assignment", "Set exactly one of server_id and load_balancer_id.")
+	}
+}
+
+// fill copies the API's view; the target not in use stays null (not ""), so the configuration
+// that leaves it out plans no change.
 func (m *reservedIPAssignmentModel) fill(ip *cloudxino.ReservedIP) {
 	m.ID = types.StringValue(ip.Id)
 	m.ReservedIPID = types.StringValue(ip.Id)
-	m.ServerID = strValueOrEmpty(ip.ServerId)
+	m.ServerID = types.StringPointerValue(ip.ServerId)
+	m.LoadBalancerID = types.StringPointerValue(ip.LoadBalancerId)
 	m.IPAddress = strValueOrEmpty(ip.IpAddress)
+}
+
+// target is the one the configuration names; the call that points the address there.
+func (r *reservedIPAssignmentResource) assign(ctx context.Context, m reservedIPAssignmentModel) (*cloudxino.ReservedIP, error) {
+	if !m.LoadBalancerID.IsNull() && m.LoadBalancerID.ValueString() != "" {
+		return r.client.ReservedIPs.AssignLoadBalancer(ctx, m.ReservedIPID.ValueString(), m.LoadBalancerID.ValueString())
+	}
+	return r.client.ReservedIPs.Assign(ctx, m.ReservedIPID.ValueString(), m.ServerID.ValueString())
+}
+
+// ours: the address still points where this assignment put it.
+func (m reservedIPAssignmentModel) ours(ip *cloudxino.ReservedIP) bool {
+	if !m.LoadBalancerID.IsNull() && m.LoadBalancerID.ValueString() != "" {
+		return ip.LoadBalancerId != nil && *ip.LoadBalancerId == m.LoadBalancerID.ValueString()
+	}
+	return ip.ServerId != nil && *ip.ServerId == m.ServerID.ValueString()
 }
 
 func (r *reservedIPAssignmentResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -240,7 +293,7 @@ func (r *reservedIPAssignmentResource) Create(ctx context.Context, req resource.
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	ip, err := r.client.ReservedIPs.Assign(ctx, plan.ReservedIPID.ValueString(), plan.ServerID.ValueString())
+	ip, err := r.assign(ctx, plan)
 	if err != nil {
 		apiError(&resp.Diagnostics, "assign the reserved IP", err)
 		return
@@ -268,12 +321,13 @@ func (r *reservedIPAssignmentResource) Read(ctx context.Context, req resource.Re
 		apiError(&resp.Diagnostics, "read the reserved IP", err)
 		return
 	}
-	if ip.ServerId == nil || *ip.ServerId == "" {
-		// unassigned outside Terraform (or its server was deleted): plan a new assignment
+	if (ip.ServerId == nil || *ip.ServerId == "") && (ip.LoadBalancerId == nil || *ip.LoadBalancerId == "") {
+		// unassigned outside Terraform (or its target was deleted, or it was given to a CKS
+		// Service): plan a new assignment
 		resp.State.RemoveResource(ctx)
 		return
 	}
-	state.fill(ip) // pointing elsewhere: server_id shows the drift and the next apply moves it back
+	state.fill(ip) // pointing elsewhere: server_id / load_balancer_id show the drift and the next apply moves it back
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 }
 
@@ -283,7 +337,7 @@ func (r *reservedIPAssignmentResource) Update(ctx context.Context, req resource.
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	ip, err := r.client.ReservedIPs.Assign(ctx, plan.ReservedIPID.ValueString(), plan.ServerID.ValueString())
+	ip, err := r.assign(ctx, plan)
 	if err != nil {
 		apiError(&resp.Diagnostics, "move the reserved IP", err)
 		return
@@ -308,7 +362,7 @@ func (r *reservedIPAssignmentResource) Delete(ctx context.Context, req resource.
 		return
 	}
 	// only undo our own assignment: something else may have moved it since
-	if ip.ServerId == nil || *ip.ServerId != state.ServerID.ValueString() {
+	if !state.ours(ip) {
 		return
 	}
 	if _, err := r.client.ReservedIPs.Unassign(ctx, id); err != nil && !cloudxino.IsNotFound(err) {

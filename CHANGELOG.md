@@ -1,3 +1,14 @@
+## 0.1.3 (unreleased)
+
+Features:
+
+- `cloudxino_reserved_ip_assignment`: `load_balancer_id` points a reserved IP at a CC2 load balancer
+  (exactly one of `server_id`, `load_balancer_id`; `server_id` is now optional). Moving between a
+  server and a load balancer is an in-place update. A CKS LoadBalancer Service asks for a reserved
+  IP with its own annotation `cloudxino.com/reserved-ip`.
+
+Uses cloudxino-go with `ReservedIPs.AssignLoadBalancer` (pseudo-version until cloudxino-go v0.1.3 is tagged).
+
 ## 0.1.2 (November 16, 2026)
 
 Features:

@@ -33,5 +33,5 @@ provider "cloudxino" {
 
 ### Optional
 
-- `api_url` (String) API address. Defaults to CLOUDXINO_API_URL, else https://console.cloudxino.com/api.
+- `api_url` (String) API address. Defaults to CLOUDXINO_API_URL, else https://cloudxino.com/api.
 - `token` (String, Sensitive) API key (Account → API keys in the console). Defaults to the CLOUDXINO_TOKEN environment variable.

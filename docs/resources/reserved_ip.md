@@ -18,7 +18,7 @@ Point it at a server either with `server_id` here or with a `cloudxino_reserved_
 ```terraform
 # A reserved IP pointed at a server. Changing server_id moves the address; removing it unassigns it.
 resource "cloudxino_reserved_ip" "web" {
-  region    = "dhaka-1"
+  region    = cloudxino_server.web.region # the server must be in the same region
   server_id = cloudxino_server.web.id
 }
 
@@ -33,7 +33,7 @@ output "web_address" {
 ### Optional
 
 - `project_id` (String) Left out = the team's default project.
-- `region` (String) Region ID; left out = the default region. Changing it replaces the reserved IP (a new address).
+- `region` (String) Region ID; left out = the default region. A server it points at must be in this region. Changing it replaces the reserved IP (a new address).
 - `server_id` (String) ID of a `cloudxino_server` in the same region to point the address at. Changing it moves the address; removing it unassigns it. Leave it out when a `cloudxino_reserved_ip_assignment` manages the assignment.
 
 ### Read-Only

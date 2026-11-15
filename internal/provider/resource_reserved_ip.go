@@ -53,7 +53,7 @@ func (r *reservedIPResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 			"region": schema.StringAttribute{
 				Optional: true, Computed: true, PlanModifiers: keepReplace,
-				Description: "Region ID; left out = the default region. Changing it replaces the reserved IP (a new address).",
+				Description: "Region ID; left out = the default region. A server it points at must be in this region. Changing it replaces the reserved IP (a new address).",
 			},
 			"project_id": schema.StringAttribute{
 				Optional: true, Computed: true, PlanModifiers: keepReplace,

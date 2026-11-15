@@ -16,7 +16,7 @@ Points a `cloudxino_reserved_ip` at a CC2 server. Kept apart from the reserved I
 # Keep the address when the server is replaced: the reserved IP has no server_id, and the
 # assignment moves to the new server.
 resource "cloudxino_reserved_ip" "web" {
-  region = "dhaka-1"
+  region = "dhaka-1" # the server must be in this region
 }
 
 resource "cloudxino_reserved_ip_assignment" "web" {

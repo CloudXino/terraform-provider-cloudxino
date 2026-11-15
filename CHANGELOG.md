@@ -1,4 +1,4 @@
-## Unreleased
+## 0.1.2 (November 16, 2026)
 
 Features:
 
@@ -8,8 +8,8 @@ Features:
 - `cloudxino_reserved_ip_assignment` resource: points a reserved IP at a server on its own, so the
   address outlives a `cloudxino_server` that is replaced.
 
-Needs reserved IPs on the API (503 `unavailable` until then). Depends on cloudxino-go with the
-`ReservedIPs` service.
+Needs reserved IPs switched on for the API (503 `unavailable` until then). Uses cloudxino-go v0.1.2
+(the `ReservedIPs` service).
 
 ## 0.1.1 (November 15, 2026)
 

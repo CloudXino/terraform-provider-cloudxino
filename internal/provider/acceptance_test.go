@@ -1,0 +1,176 @@
+package provider
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/cloudxino/cloudxino-go"
+	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
+)
+
+// TestAccStack runs a small stack against the real CloudXino API: apply, an empty plan,
+// import of every resource, then destroy, and checks that the API no longer has any of it.
+//
+// It costs money, so it only runs with TF_ACC=1 and CLOUDXINO_TOKEN set (see the
+// "acceptance" workflow). Use a test team's developer key, never a real team's.
+//
+//	CLOUDXINO_ACC_IMAGE  image slug (default debian-13)
+//	CLOUDXINO_ACC_SIZE   size slug (default s-1vcpu-1gb, the smallest)
+//	CLOUDXINO_ACC_DOMAIN zone to create (default tfacc-<random>.com; it is never delegated)
+func TestAccStack(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("set TF_ACC=1 to run acceptance tests against the real API")
+	}
+	if os.Getenv("CLOUDXINO_TOKEN") == "" {
+		t.Fatal("CLOUDXINO_TOKEN must be set for acceptance tests")
+	}
+
+	suffix := acctest.RandStringFromCharSet(8, acctest.CharSetAlphaNum)
+	name := "tfacc-" + strings.ToLower(suffix)
+	image := envOr("CLOUDXINO_ACC_IMAGE", "debian-13")
+	size := envOr("CLOUDXINO_ACC_SIZE", "s-1vcpu-1gb")
+	domain := envOr("CLOUDXINO_ACC_DOMAIN", name+".com")
+	pub, _, err := acctest.RandSSHKeyPair("tfacc@cloudxino")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config := fmt.Sprintf(`
+resource "cloudxino_ssh_key" "k" {
+  name       = %[1]q
+  public_key = %[2]q
+}
+
+resource "cloudxino_server" "web" {
+  name        = %[1]q
+  image       = %[3]q
+  size        = %[4]q
+  ssh_key_ids = [cloudxino_ssh_key.k.id]
+  tags        = [%[1]q]
+}
+
+resource "cloudxino_firewall" "web" {
+  name = %[1]q
+  inbound_rule = [
+    { protocol = "tcp", ports = "80", sources = ["0.0.0.0/0"] },
+    { protocol = "tcp", ports = "22", sources = ["0.0.0.0/0"] },
+  ]
+  tags = [%[1]q]
+}
+
+resource "cloudxino_load_balancer" "web" {
+  name = %[1]q
+  forwarding_rule = [
+    { entry_protocol = "http", entry_port = 80, target_port = 80 },
+  ]
+  target_ids = [cloudxino_server.web.id]
+}
+
+resource "cloudxino_dns_zone" "z" {
+  name = %[5]q
+}
+
+resource "cloudxino_dns_record" "www" {
+  zone_id = cloudxino_dns_zone.z.id
+  name    = "www"
+  type    = "A"
+  content = cloudxino_load_balancer.web.ip_address
+  ttl     = 300
+}
+`, name, pub, image, size, domain)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy:             checkAccDestroyed,
+		Steps: []resource.TestStep{
+			{
+				Config:           config,
+				ConfigPlanChecks: noChanges,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttrSet("cloudxino_ssh_key.k", "fingerprint"),
+					resource.TestCheckResourceAttr("cloudxino_server.web", "status", "running"),
+					resource.TestCheckResourceAttrSet("cloudxino_server.web", "ip_address"),
+					resource.TestCheckResourceAttrSet("cloudxino_load_balancer.web", "ip_address"),
+					resource.TestCheckResourceAttrSet("cloudxino_dns_zone.z", "nameservers.#"),
+					resource.TestCheckResourceAttr("cloudxino_dns_record.www", "fqdn", "www."+domain),
+				),
+			},
+			{ResourceName: "cloudxino_ssh_key.k", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"public_key"}},
+			{ResourceName: "cloudxino_server.web", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"timeouts"}},
+			{ResourceName: "cloudxino_firewall.web", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"inbound_rule", "outbound_rule"}},
+			{ResourceName: "cloudxino_load_balancer.web", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"timeouts"}},
+			{ResourceName: "cloudxino_dns_zone.z", ImportState: true, ImportStateVerify: true},
+			{
+				ResourceName: "cloudxino_dns_record.www", ImportState: true, ImportStateVerify: true,
+				ImportStateIdFunc: func(s *terraform.State) (string, error) {
+					rs := s.RootModule().Resources["cloudxino_dns_record.www"]
+					return rs.Primary.Attributes["zone_id"] + "/" + rs.Primary.ID, nil
+				},
+			},
+		},
+	})
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+// checkAccDestroyed asks the API for every resource the test made and fails if any is still there.
+// A server may linger briefly in a deleting state, which counts as gone.
+func checkAccDestroyed(s *terraform.State) error {
+	opts := []cloudxino.Option{}
+	if u := os.Getenv("CLOUDXINO_API_URL"); u != "" {
+		opts = append(opts, cloudxino.WithBaseURL(u))
+	}
+	c, err := cloudxino.NewClient(os.Getenv("CLOUDXINO_TOKEN"), opts...)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	var left []string
+	for _, rs := range s.RootModule().Resources {
+		id := rs.Primary.ID
+		var err error
+		switch rs.Type {
+		case "cloudxino_ssh_key":
+			_, err = c.SSHKeys.Get(ctx, id)
+		case "cloudxino_server":
+			var srv *cloudxino.Server
+			srv, err = c.Servers.Get(ctx, id)
+			if err == nil && srv.Status != nil && strings.HasPrefix(strings.ToLower(*srv.Status), "delet") {
+				continue
+			}
+		case "cloudxino_firewall":
+			_, err = c.Firewalls.Get(ctx, id)
+		case "cloudxino_load_balancer":
+			_, err = c.LoadBalancers.Get(ctx, id)
+		case "cloudxino_dns_zone":
+			_, err = c.DNS.GetZone(ctx, id)
+		case "cloudxino_dns_record":
+			_, err = c.DNS.GetRecord(ctx, rs.Primary.Attributes["zone_id"], id)
+		default:
+			continue
+		}
+		switch {
+		case err == nil:
+			left = append(left, rs.Type+" "+id)
+		case !cloudxino.IsNotFound(err):
+			return fmt.Errorf("checking %s %s: %w", rs.Type, id, err)
+		}
+	}
+	if len(left) > 0 {
+		return fmt.Errorf("still present after destroy: %s", strings.Join(left, ", "))
+	}
+	return nil
+}

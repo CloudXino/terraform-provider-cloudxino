@@ -17,6 +17,9 @@ on:
       domain:
         description: DNS zone to create (blank = a random tfacc-*.com that is never delegated)
         default: ""
+      api_url:
+        description: API address
+        default: https://cloudxino.com/api
 
 permissions:
   contents: read
@@ -45,3 +48,4 @@ jobs:
           CLOUDXINO_ACC_IMAGE: ${{ inputs.image }}
           CLOUDXINO_ACC_SIZE: ${{ inputs.size }}
           CLOUDXINO_ACC_DOMAIN: ${{ inputs.domain }}
+          CLOUDXINO_API_URL: ${{ inputs.api_url }}

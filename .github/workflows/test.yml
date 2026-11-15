@@ -43,8 +43,8 @@ jobs:
       - uses: opentofu/setup-opentofu@v1
         with:
           tofu_wrapper: false
-      - run: go test ./...
+      # setup-opentofu puts tofu in the tool cache, not a fixed path
+      - run: TF_ACC_TERRAFORM_PATH="$(command -v tofu)" go test ./...
         env:
-          TF_ACC_TERRAFORM_PATH: /usr/local/bin/tofu
           TF_ACC_PROVIDER_NAMESPACE: hashicorp
           TF_ACC_PROVIDER_HOST: registry.opentofu.org

@@ -418,6 +418,21 @@ func (f *fakeAPI) reservedIPs(w http.ResponseWriter, r *http.Request, parts []st
 			return false
 		}
 		rip["server_id"], rip["target_id"], rip["target_type"], rip["assigned_to"], rip["status"] = serverID, serverID, "mc2", s["name"], "assigned"
+		rip["load_balancer_id"] = nil
+		return true
+	}
+	assignLB := func(rip map[string]any, lbID string) bool {
+		lb, ok := f.lbs[lbID]
+		if !ok {
+			reply(w, 404, map[string]any{"detail": "Load balancer not found", "code": "not_found"})
+			return false
+		}
+		if lb["region"] != rip["region"] {
+			reply(w, 409, map[string]any{"detail": "The load balancer is in another region", "code": "conflict"})
+			return false
+		}
+		rip["load_balancer_id"], rip["target_id"], rip["target_type"], rip["assigned_to"], rip["status"] = lbID, lbID, "load_balancer", lb["name"], "assigned"
+		rip["server_id"] = nil
 		return true
 	}
 	if len(parts) == 1 {
@@ -467,11 +482,18 @@ func (f *fakeAPI) reservedIPs(w http.ResponseWriter, r *http.Request, parts []st
 		delete(f.rips, parts[1])
 		w.WriteHeader(204)
 	case len(parts) == 3 && parts[2] == "assign":
-		if assign(rip, body["server_id"].(string)) {
+		sid, _ := body["server_id"].(string)
+		lid, _ := body["load_balancer_id"].(string)
+		if (sid == "") == (lid == "") {
+			reply(w, 422, map[string]any{"detail": "Give exactly one of server_id, load_balancer_id, cks_load_balancer_id", "code": "validation_error"})
+			return
+		}
+		if sid != "" && assign(rip, sid) || lid != "" && assignLB(rip, lid) {
 			reply(w, 200, rip)
 		}
 	case len(parts) == 3 && parts[2] == "unassign":
 		rip["server_id"], rip["target_id"], rip["target_type"], rip["assigned_to"], rip["status"] = nil, nil, nil, nil, "available"
+		rip["load_balancer_id"] = nil
 		reply(w, 200, rip)
 	}
 }

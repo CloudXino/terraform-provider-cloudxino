@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -214,6 +215,71 @@ resource "cloudxino_reserved_ip_assignment" "a" {
 			},
 		},
 	})
+}
+
+func TestReservedIPAssignmentToLoadBalancerAndBack(t *testing.T) {
+	newFakeAPI(t)
+	lb := `
+resource "cloudxino_load_balancer" "lb" {
+  name = "web"
+  forwarding_rule = [
+    { entry_protocol = "http", entry_port = 80, target_port = 8080 },
+  ]
+  target_ids = [cloudxino_server.a.id]
+}
+resource "cloudxino_reserved_ip" "ip" {}
+`
+	cfg := func(target string) string {
+		return twoServers("debian-13") + lb + `
+resource "cloudxino_reserved_ip_assignment" "a" {
+  reserved_ip_id = cloudxino_reserved_ip.ip.id
+  ` + target + `
+}`
+	}
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config:           cfg("load_balancer_id = cloudxino_load_balancer.lb.id"),
+				ConfigPlanChecks: noChanges,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttrPair("cloudxino_reserved_ip_assignment.a", "load_balancer_id", "cloudxino_load_balancer.lb", "id"),
+					resource.TestCheckNoResourceAttr("cloudxino_reserved_ip_assignment.a", "server_id"),
+				),
+			},
+			{
+				// from the load balancer to a server: moved in place, no new assignment
+				Config: cfg("server_id = cloudxino_server.b.id"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply:             []plancheck.PlanCheck{plancheck.ExpectResourceAction("cloudxino_reserved_ip_assignment.a", plancheck.ResourceActionUpdate)},
+					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttrPair("cloudxino_reserved_ip_assignment.a", "server_id", "cloudxino_server.b", "id"),
+					resource.TestCheckNoResourceAttr("cloudxino_reserved_ip_assignment.a", "load_balancer_id"),
+				),
+			},
+			{ResourceName: "cloudxino_reserved_ip_assignment.a", ImportState: true, ImportStateVerify: true},
+		},
+	})
+}
+
+func TestReservedIPAssignmentNeedsExactlyOneTarget(t *testing.T) {
+	newFakeAPI(t)
+	for _, target := range []string{"", "server_id = cloudxino_server.a.id\n  load_balancer_id = \"lb-1\""} {
+		resource.UnitTest(t, resource.TestCase{
+			ProtoV6ProviderFactories: factories,
+			Steps: []resource.TestStep{{
+				Config: twoServers("debian-13") + `
+resource "cloudxino_reserved_ip" "ip" {}
+resource "cloudxino_reserved_ip_assignment" "a" {
+  reserved_ip_id = cloudxino_reserved_ip.ip.id
+  ` + target + `
+}`,
+				ExpectError: regexp.MustCompile("Set exactly one of server_id and load_balancer_id"),
+			}},
+		})
+	}
 }
 
 func TestReservedIPUnavailable(t *testing.T) {

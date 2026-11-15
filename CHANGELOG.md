@@ -7,7 +7,7 @@ Features:
   server and a load balancer is an in-place update. A CKS LoadBalancer Service asks for a reserved
   IP with its own annotation `cloudxino.com/reserved-ip`.
 
-Uses cloudxino-go with `ReservedIPs.AssignLoadBalancer` (pseudo-version until cloudxino-go v0.1.3 is tagged).
+Uses cloudxino-go v0.1.3 (`ReservedIPs.AssignLoadBalancer`).
 
 ## 0.1.2 (November 16, 2026)
 

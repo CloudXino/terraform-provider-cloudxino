@@ -335,3 +335,75 @@ func (d *dnsZoneDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	m.fill(z)
 	resp.Diagnostics.Append(resp.State.Set(ctx, m)...)
 }
+
+// --- cloudxino_reserved_ip -----------------------------------------------------------------------
+
+type reservedIPDataSource struct{ dataSourceBase }
+
+type reservedIPDSModel struct {
+	ID        types.String `tfsdk:"id"`
+	IPAddress types.String `tfsdk:"ip_address"`
+	Region    types.String `tfsdk:"region"`
+	ProjectID types.String `tfsdk:"project_id"`
+	ServerID  types.String `tfsdk:"server_id"`
+	Status    types.String `tfsdk:"status"`
+}
+
+func newReservedIPDataSource() datasource.DataSource { return &reservedIPDataSource{} }
+
+func (d *reservedIPDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_reserved_ip"
+}
+
+func (d *reservedIPDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Description: "A reserved IP of the team, by `ip_address` or `id`.",
+		Attributes: map[string]schema.Attribute{
+			"id":         schema.StringAttribute{Optional: true, Computed: true},
+			"ip_address": schema.StringAttribute{Optional: true, Computed: true, Description: "The address, e.g. `203.0.113.10`."},
+			"region":     schema.StringAttribute{Computed: true},
+			"project_id": schema.StringAttribute{Computed: true},
+			"server_id":  schema.StringAttribute{Computed: true, Description: "The CC2 server it points at; null when unassigned."},
+			"status":     schema.StringAttribute{Computed: true, Description: "`available`, `assigned` or `deleting`."},
+		},
+	}
+}
+
+func (d *reservedIPDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	var m reservedIPDSModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &m)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	var ip *cloudxino.ReservedIP
+	if !m.ID.IsNull() {
+		got, err := d.client.ReservedIPs.Get(ctx, m.ID.ValueString())
+		if err != nil {
+			apiError(&resp.Diagnostics, "read the reserved IP", err)
+			return
+		}
+		ip = got
+	} else {
+		if m.IPAddress.IsNull() {
+			resp.Diagnostics.AddError("Which reserved IP?", "Set ip_address or id.")
+			return
+		}
+		ips, err := d.client.ReservedIPs.List(ctx, &cloudxino.ListReservedIPsOptions{IPAddress: m.IPAddress.ValueString()})
+		if err != nil {
+			apiError(&resp.Diagnostics, "list reserved IPs", err)
+			return
+		}
+		if len(ips) != 1 {
+			resp.Diagnostics.AddError("Reserved IP not found", fmt.Sprintf("The team has no reserved IP %s.", m.IPAddress.ValueString()))
+			return
+		}
+		ip = &ips[0]
+	}
+	m.ID = types.StringValue(ip.Id)
+	m.IPAddress = strValueOrEmpty(ip.IpAddress)
+	m.Region = strValueOrEmpty(ip.Region)
+	m.ProjectID = strValueOrEmpty(ip.ProjectId)
+	m.ServerID = strValue(ip.ServerId)
+	m.Status = strValueOrEmpty(ip.Status)
+	resp.Diagnostics.Append(resp.State.Set(ctx, m)...)
+}

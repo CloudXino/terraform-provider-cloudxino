@@ -31,10 +31,9 @@ jobs:
           git diff --exit-code -- docs
       - run: terraform fmt -recursive -check examples
 
-  # The same tests on OpenTofu. Not required yet: it has not had a first green run.
+  # The same tests on OpenTofu.
   opentofu:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

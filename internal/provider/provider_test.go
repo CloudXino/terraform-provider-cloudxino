@@ -279,6 +279,7 @@ func TestLoadBalancer(t *testing.T) {
 					resource.TestCheckResourceAttr("cloudxino_load_balancer.lb", "ip_address", "203.0.113.50"),
 					resource.TestCheckResourceAttr("cloudxino_load_balancer.lb", "forwarding_rule.0.target_protocol", "http"),
 					resource.TestCheckResourceAttr("cloudxino_load_balancer.lb", "health_check.protocol", "tcp"),
+					resource.TestCheckResourceAttr("cloudxino_load_balancer.lb", "health_check.port", "8080"),
 					resource.TestCheckResourceAttr("cloudxino_load_balancer.lb", "algorithm", "round_robin"),
 				),
 			},
@@ -293,7 +294,11 @@ func TestLoadBalancer(t *testing.T) {
   health_check = { protocol = "http", path = "/healthz" }
   target_ids   = ["srv-1", "srv-2"]
 }`,
-				ConfigPlanChecks: noChanges,
+				// changed in place, not replaced (project_id left out must not force a new LB)
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply:             []plancheck.PlanCheck{plancheck.ExpectResourceAction("cloudxino_load_balancer.lb", plancheck.ResourceActionUpdate)},
+					PostApplyPostRefresh: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("cloudxino_load_balancer.lb", "forwarding_rule.#", "2"),
 					resource.TestCheckResourceAttr("cloudxino_load_balancer.lb", "health_check.path", "/healthz"),

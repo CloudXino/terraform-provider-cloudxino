@@ -2,6 +2,10 @@ package provider
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"strings"
@@ -36,7 +40,7 @@ func TestAccStack(t *testing.T) {
 	image := envOr("CLOUDXINO_ACC_IMAGE", "debian-13")
 	size := envOr("CLOUDXINO_ACC_SIZE", "s-1vcpu-1gb")
 	domain := envOr("CLOUDXINO_ACC_DOMAIN", name+".com")
-	pub, _, err := acctest.RandSSHKeyPair("tfacc@cloudxino")
+	pub, err := randEd25519AuthorizedKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +119,21 @@ resource "cloudxino_dns_record" "www" {
 			},
 		},
 	})
+}
+
+// randEd25519AuthorizedKey makes a throwaway ed25519 public key in authorized_keys form.
+// (acctest.RandSSHKeyPair makes 1024-bit RSA, which the API rejects.)
+func randEd25519AuthorizedKey() (string, error) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return "", err
+	}
+	var b []byte
+	for _, part := range [][]byte{[]byte("ssh-ed25519"), pub} {
+		b = binary.BigEndian.AppendUint32(b, uint32(len(part)))
+		b = append(b, part...)
+	}
+	return "ssh-ed25519 " + base64.StdEncoding.EncodeToString(b) + " tfacc@cloudxino", nil
 }
 
 func envOr(key, def string) string {

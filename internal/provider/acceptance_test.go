@@ -107,7 +107,8 @@ resource "cloudxino_dns_record" "www" {
 			},
 			{ResourceName: "cloudxino_ssh_key.k", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"public_key"}},
 			{ResourceName: "cloudxino_server.web", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"timeouts"}},
-			{ResourceName: "cloudxino_firewall.web", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"inbound_rule", "outbound_rule"}},
+			// server_count is live: the firewall was made before the tagged server existed, so state says 0 until a refresh.
+			{ResourceName: "cloudxino_firewall.web", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"inbound_rule", "outbound_rule", "server_count"}},
 			{ResourceName: "cloudxino_load_balancer.web", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"timeouts"}},
 			{ResourceName: "cloudxino_dns_zone.z", ImportState: true, ImportStateVerify: true},
 			{

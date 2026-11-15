@@ -2,7 +2,8 @@ name: acceptance
 
 # Runs TestAccStack against the real CloudXino API: it creates a small stack (SSH key, the
 # smallest server, firewall, load balancer, DNS zone and record), checks plan is empty and import
-# works, then destroys everything. It costs money, so it only runs by hand (Actions -> acceptance
+# works, then destroys everything. TestAccReservedIP does the same for a server and a reserved IP;
+# it skips when the API answers 503 "unavailable" (reserved IPs turned off or none free). It costs money, so it only runs by hand (Actions -> acceptance
 # -> Run workflow). Needs the secret CLOUDXINO_TOKEN: a developer API key of a test team.
 
 on:

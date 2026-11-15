@@ -122,6 +122,92 @@ resource "cloudxino_dns_record" "www" {
 	})
 }
 
+// TestAccReservedIP reserves an address, points it at a server through an assignment, reads it
+// back by address, imports both, then destroys everything. It skips when the API answers 503
+// "unavailable" (no free address, or reserved IPs are turned off for the team's region).
+//
+//	CLOUDXINO_ACC_IMAGE, CLOUDXINO_ACC_SIZE as for TestAccStack
+func TestAccReservedIP(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("set TF_ACC=1 to run acceptance tests against the real API")
+	}
+	if os.Getenv("CLOUDXINO_TOKEN") == "" {
+		t.Fatal("CLOUDXINO_TOKEN must be set for acceptance tests")
+	}
+	skipUnlessReservedIPs(t)
+
+	name := "tfacc-" + strings.ToLower(acctest.RandStringFromCharSet(8, acctest.CharSetAlphaNum))
+	config := fmt.Sprintf(`
+resource "cloudxino_server" "web" {
+  name  = %[1]q
+  image = %[2]q
+  size  = %[3]q
+}
+
+resource "cloudxino_reserved_ip" "ip" {
+  region = cloudxino_server.web.region
+}
+
+resource "cloudxino_reserved_ip_assignment" "web" {
+  reserved_ip_id = cloudxino_reserved_ip.ip.id
+  server_id      = cloudxino_server.web.id
+}
+
+data "cloudxino_reserved_ip" "by_address" {
+  ip_address = cloudxino_reserved_ip_assignment.web.ip_address
+}
+`, name, envOr("CLOUDXINO_ACC_IMAGE", "debian-13"), envOr("CLOUDXINO_ACC_SIZE", "s-1vcpu-1gb"))
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy:             checkAccDestroyed,
+		Steps: []resource.TestStep{
+			{
+				Config:           config,
+				ConfigPlanChecks: noChanges,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttrSet("cloudxino_reserved_ip.ip", "ip_address"),
+					resource.TestCheckResourceAttrPair("cloudxino_reserved_ip_assignment.web", "server_id", "cloudxino_server.web", "id"),
+					resource.TestCheckResourceAttrPair("data.cloudxino_reserved_ip.by_address", "id", "cloudxino_reserved_ip.ip", "id"),
+					resource.TestCheckResourceAttrPair("data.cloudxino_reserved_ip.by_address", "server_id", "cloudxino_server.web", "id"),
+					resource.TestCheckResourceAttr("data.cloudxino_reserved_ip.by_address", "status", "assigned"),
+				),
+			},
+			{ResourceName: "cloudxino_reserved_ip.ip", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"status"}},
+			{ResourceName: "cloudxino_reserved_ip_assignment.web", ImportState: true, ImportStateVerify: true},
+		},
+	})
+}
+
+// skipUnlessReservedIPs reserves an address and gives it straight back; a 503 "unavailable" skips the test.
+func skipUnlessReservedIPs(t *testing.T) {
+	t.Helper()
+	c, err := accClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	ip, err := c.ReservedIPs.Create(ctx, cloudxino.CreateReservedIPRequest{})
+	if cloudxino.IsUnavailable(err) {
+		t.Skipf("reserved IPs are not available on this API: %v", err)
+	}
+	if err != nil {
+		t.Fatalf("probing reserved IPs: %v", err)
+	}
+	if err := c.ReservedIPs.Delete(ctx, ip.Id); err != nil {
+		t.Fatalf("giving back the probe reserved IP %s (%s): %v", ip.Id, *ip.IpAddress, err)
+	}
+}
+
+func accClient() (*cloudxino.Client, error) {
+	opts := []cloudxino.Option{}
+	if u := os.Getenv("CLOUDXINO_API_URL"); u != "" {
+		opts = append(opts, cloudxino.WithBaseURL(u))
+	}
+	return cloudxino.NewClient(os.Getenv("CLOUDXINO_TOKEN"), opts...)
+}
+
 // randEd25519AuthorizedKey makes a throwaway ed25519 public key in authorized_keys form.
 // (acctest.RandSSHKeyPair makes 1024-bit RSA, which the API rejects.)
 func randEd25519AuthorizedKey() (string, error) {
@@ -147,11 +233,7 @@ func envOr(key, def string) string {
 // checkAccDestroyed asks the API for every resource the test made and fails if any is still there.
 // A server may linger briefly in a deleting state, which counts as gone.
 func checkAccDestroyed(s *terraform.State) error {
-	opts := []cloudxino.Option{}
-	if u := os.Getenv("CLOUDXINO_API_URL"); u != "" {
-		opts = append(opts, cloudxino.WithBaseURL(u))
-	}
-	c, err := cloudxino.NewClient(os.Getenv("CLOUDXINO_TOKEN"), opts...)
+	c, err := accClient()
 	if err != nil {
 		return err
 	}
@@ -179,6 +261,12 @@ func checkAccDestroyed(s *terraform.State) error {
 			_, err = c.DNS.GetZone(ctx, id)
 		case "cloudxino_dns_record":
 			_, err = c.DNS.GetRecord(ctx, rs.Primary.Attributes["zone_id"], id)
+		case "cloudxino_reserved_ip":
+			var ip *cloudxino.ReservedIP
+			ip, err = c.ReservedIPs.Get(ctx, id)
+			if err == nil && ip.Status != nil && *ip.Status == cloudxino.ReservedIPStatusDeleting {
+				continue
+			}
 		default:
 			continue
 		}

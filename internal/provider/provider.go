@@ -98,6 +98,8 @@ func (p *cloudxinoProvider) Resources(_ context.Context) []func() resource.Resou
 		newDNSRecordResource,
 		newServerResource,
 		newLoadBalancerResource,
+		newReservedIPResource,
+		newReservedIPAssignmentResource,
 	}
 }
 
@@ -108,5 +110,6 @@ func (p *cloudxinoProvider) DataSources(_ context.Context) []func() datasource.D
 		newSSHKeyDataSource,
 		newServerDataSource,
 		newDNSZoneDataSource,
+		newReservedIPDataSource,
 	}
 }

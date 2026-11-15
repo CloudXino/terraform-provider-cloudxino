@@ -1,3 +1,16 @@
+## Unreleased
+
+Features:
+
+- `cloudxino_reserved_ip` resource and data source: a public IPv4 the team keeps, pointed at a CC2
+  server with `server_id` (changing it moves the address, removing it unassigns it). Import by ID;
+  the data source finds one by `ip_address`.
+- `cloudxino_reserved_ip_assignment` resource: points a reserved IP at a server on its own, so the
+  address outlives a `cloudxino_server` that is replaced.
+
+Needs reserved IPs on the API (503 `unavailable` until then). Depends on cloudxino-go with the
+`ReservedIPs` service.
+
 ## 0.1.1 (November 15, 2026)
 
 Fixes:

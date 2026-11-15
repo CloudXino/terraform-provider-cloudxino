@@ -22,6 +22,8 @@ type fakeAPI struct {
 	servers map[string]map[string]any
 	polls   map[string]int // server id -> GETs since a change (drives status transitions)
 	lbs     map[string]map[string]any
+	rips    map[string]map[string]any
+	ripsOff bool // reserved IPs turned off: every create answers 503 unavailable
 	srv     *httptest.Server
 }
 
@@ -29,7 +31,7 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 	f := &fakeAPI{
 		keys: map[string]map[string]any{}, fws: map[string]map[string]any{}, zones: map[string]map[string]any{},
 		records: map[string]map[string]any{}, servers: map[string]map[string]any{}, polls: map[string]int{},
-		lbs: map[string]map[string]any{},
+		lbs: map[string]map[string]any{}, rips: map[string]map[string]any{},
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
@@ -77,6 +79,8 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		f.mc2(w, r, parts, body)
 	case parts[0] == "load-balancers":
 		f.loadBalancers(w, r, parts, body)
+	case parts[0] == "reserved-ips":
+		f.reservedIPs(w, r, parts, body)
 	default:
 		notFound(w)
 	}
@@ -398,5 +402,76 @@ func (f *fakeAPI) loadBalancers(w http.ResponseWriter, r *http.Request, parts []
 	case "DELETE":
 		delete(f.lbs, parts[1])
 		reply(w, 200, map[string]any{"message": "deleted"})
+	}
+}
+
+// reservedIPs: region "full" has no free address (503 unavailable, as when the feature is off).
+func (f *fakeAPI) reservedIPs(w http.ResponseWriter, r *http.Request, parts []string, body map[string]any) {
+	assign := func(rip map[string]any, serverID string) bool {
+		s, ok := f.servers[serverID]
+		if !ok {
+			reply(w, 404, map[string]any{"detail": "CC2 server not found", "code": "not_found"})
+			return false
+		}
+		if s["region"] != rip["region"] {
+			reply(w, 409, map[string]any{"detail": "The server is in another region", "code": "conflict"})
+			return false
+		}
+		rip["server_id"], rip["target_id"], rip["target_type"], rip["assigned_to"], rip["status"] = serverID, serverID, "mc2", s["name"], "assigned"
+		return true
+	}
+	if len(parts) == 1 {
+		switch r.Method {
+		case "GET":
+			out := []map[string]any{}
+			for _, rip := range f.rips {
+				if a := r.URL.Query().Get("ip_address"); a != "" && rip["ip_address"] != a {
+					continue
+				}
+				out = append(out, rip)
+			}
+			reply(w, 200, out)
+		case "POST":
+			region, _ := body["region"].(string)
+			if region == "" {
+				region = "dhaka-1"
+			}
+			if region == "full" || f.ripsOff {
+				reply(w, 503, map[string]any{"detail": "Reserved IPs are not available right now", "code": "unavailable"})
+				return
+			}
+			project, _ := body["project_id"].(string)
+			if project == "" {
+				project = "p1"
+			}
+			id := f.id("rip")
+			rip := map[string]any{"id": id, "ip_address": fmt.Sprintf("198.51.100.%d", f.seq), "region": region, "project_id": project,
+				"status": "available", "server_id": nil, "target_id": nil, "target_type": nil}
+			if sid, _ := body["server_id"].(string); sid != "" && !assign(rip, sid) {
+				return
+			}
+			f.rips[id] = rip
+			reply(w, 201, rip)
+		}
+		return
+	}
+	rip, ok := f.rips[parts[1]]
+	if !ok {
+		notFound(w)
+		return
+	}
+	switch {
+	case r.Method == "GET":
+		reply(w, 200, rip)
+	case r.Method == "DELETE":
+		delete(f.rips, parts[1])
+		w.WriteHeader(204)
+	case len(parts) == 3 && parts[2] == "assign":
+		if assign(rip, body["server_id"].(string)) {
+			reply(w, 200, rip)
+		}
+	case len(parts) == 3 && parts[2] == "unassign":
+		rip["server_id"], rip["target_id"], rip["target_type"], rip["assigned_to"], rip["status"] = nil, nil, nil, nil, "available"
+		reply(w, 200, rip)
 	}
 }

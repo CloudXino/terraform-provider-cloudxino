@@ -47,6 +47,8 @@ Full documentation is in [docs/](docs/) and on the Terraform Registry once relea
 | `cloudxino_dns_zone` | `cloudxino_dns_zone` | |
 | `cloudxino_dns_record` | | import with `<zone_id>/<record_id>` |
 | `cloudxino_ssh_key` | `cloudxino_ssh_key` | public keys only |
+| `cloudxino_reserved_ip` | `cloudxino_reserved_ip` | a public IPv4 the team keeps; optional `server_id`; data source by `ip_address` |
+| `cloudxino_reserved_ip_assignment` | | points a reserved IP at a server, so the address outlives a replaced server |
 | | `cloudxino_project` | the default project, or one by `id` or `name` |
 | | `cloudxino_account` | the team and role of the API key |
 
@@ -57,7 +59,7 @@ Every resource can be imported with `terraform import`.
 - Creates send an `Idempotency-Key`, so a create the provider retries after a network error never
   makes a second resource.
 - Rate limits (429), maintenance (503) and gateway errors are retried with backoff, honouring
-  `Retry-After`.
+  `Retry-After`. A 503 `unavailable` (no free reserved IP) fails at once.
 - `cloudxino_server` and `cloudxino_load_balancer` wait until the resource is ready (or gone) and
   take `timeouts`. A server whose create fails while waiting is kept in state as tainted, so the
   next apply replaces it instead of leaving it unmanaged.

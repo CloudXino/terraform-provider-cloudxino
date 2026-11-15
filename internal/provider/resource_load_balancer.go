@@ -68,10 +68,11 @@ func (r *loadBalancerResource) Schema(ctx context.Context, _ resource.SchemaRequ
 	resp.Schema = schema.Schema{
 		Description: "A load balancer: a public IP that spreads traffic over CC2 servers.",
 		Attributes: map[string]schema.Attribute{
-			"id":         schema.StringAttribute{Computed: true, PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
-			"name":       schema.StringAttribute{Required: true},
-			"region":     schema.StringAttribute{Optional: true, Computed: true, PlanModifiers: keepReplace},
-			"project_id": schema.StringAttribute{Optional: true, Computed: true, PlanModifiers: keepReplace},
+			"id":     schema.StringAttribute{Computed: true, PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"name":   schema.StringAttribute{Required: true},
+			"region": schema.StringAttribute{Optional: true, Computed: true, PlanModifiers: keepReplace},
+			// The API's answer never carries project_id, so it stays what the config says (null = default project).
+			"project_id": schema.StringAttribute{Optional: true, PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
 			"algorithm": schema.StringAttribute{
 				Optional: true, Computed: true, Default: stringdefault.StaticString("round_robin"),
 				Description: "`round_robin` or `least_connections`.",
@@ -91,7 +92,7 @@ func (r *loadBalancerResource) Schema(ctx context.Context, _ resource.SchemaRequ
 				PlanModifiers: []planmodifier.Object{objectplanmodifier.UseStateForUnknown()},
 				Attributes: map[string]schema.Attribute{
 					"protocol": schema.StringAttribute{Optional: true, Computed: true, Description: "`tcp` or `http`."},
-					"port":     schema.Int64Attribute{Optional: true, Description: "Left out = the first rule's target port."},
+					"port":     schema.Int64Attribute{Optional: true, Computed: true, Description: "Left out = the first rule's target port."},
 					"path":     schema.StringAttribute{Optional: true, Computed: true, Description: "For http checks."},
 				},
 			},
@@ -137,9 +138,6 @@ func (m *loadBalancerModel) fill(lb *cloudxino.LoadBalancer) {
 	m.ID = types.StringValue(lb.Id)
 	m.Name = strValueOrEmpty(lb.Name)
 	m.Region = strValue(lb.Region)
-	if m.ProjectID.IsUnknown() {
-		m.ProjectID = types.StringNull() // the API's answer does not carry it
-	}
 	m.Algorithm = strValue(lb.Algorithm)
 	rules := []attr.Value{}
 	if lb.ForwardingRules != nil {

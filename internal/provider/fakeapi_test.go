@@ -361,6 +361,12 @@ func (f *fakeAPI) loadBalancers(w http.ResponseWriter, r *http.Request, parts []
 		if lb["health_check"] == nil {
 			lb["health_check"] = map[string]any{"protocol": "tcp", "port": nil, "path": "/"}
 		}
+		// like the real API: a check without a port uses the first rule's target port
+		if hc := lb["health_check"].(map[string]any); hc["port"] == nil {
+			if rules, _ := lb["forwarding_rules"].([]any); len(rules) > 0 {
+				hc["port"] = rules[0].(map[string]any)["target_port"]
+			}
+		}
 		if lb["algorithm"] == nil {
 			lb["algorithm"] = "round_robin"
 		}

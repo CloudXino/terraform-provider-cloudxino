@@ -9,7 +9,7 @@ Features:
   (the pool is resized and the cluster waited for); other changes replace the cluster. Import by ID;
   the data source finds one by `name` or `id`. Example: `examples/kubernetes`.
 
-Uses cloudxino-go `Clusters` (pseudo-version until cloudxino-go v0.1.4 is tagged).
+Uses cloudxino-go v0.1.4 (the `Clusters` service).
 
 ## 0.1.3 (unreleased)
 

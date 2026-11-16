@@ -13,18 +13,21 @@ import (
 // fakeAPI is an in-memory CloudXino API, enough for the provider's resources. It normalizes input
 // the way the real API does (firewall ports and addresses, key comments), so tests catch diffs.
 type fakeAPI struct {
-	mu      sync.Mutex
-	seq     int
-	keys    map[string]map[string]any
-	fws     map[string]map[string]any
-	zones   map[string]map[string]any
-	records map[string]map[string]any // id -> record (with "zone_id")
-	servers map[string]map[string]any
-	polls   map[string]int // server id -> GETs since a change (drives status transitions)
-	lbs     map[string]map[string]any
-	rips    map[string]map[string]any
-	ripsOff bool // reserved IPs turned off: every create answers 503 unavailable
-	srv     *httptest.Server
+	mu           sync.Mutex
+	seq          int
+	keys         map[string]map[string]any
+	fws          map[string]map[string]any
+	zones        map[string]map[string]any
+	records      map[string]map[string]any // id -> record (with "zone_id")
+	servers      map[string]map[string]any
+	polls        map[string]int // server id -> GETs since a change (drives status transitions)
+	lbs          map[string]map[string]any
+	rips         map[string]map[string]any
+	ripsOff      bool // reserved IPs turned off: every create answers 503 unavailable
+	clusters     map[string]map[string]any
+	pools        map[string]map[string]any // pool id -> pool (with "cluster_id")
+	clusterFails bool                      // new clusters end in "error" instead of "active"
+	srv          *httptest.Server
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -32,12 +35,14 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		keys: map[string]map[string]any{}, fws: map[string]map[string]any{}, zones: map[string]map[string]any{},
 		records: map[string]map[string]any{}, servers: map[string]map[string]any{}, polls: map[string]int{},
 		lbs: map[string]map[string]any{}, rips: map[string]map[string]any{},
+		clusters: map[string]map[string]any{}, pools: map[string]map[string]any{},
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	t.Setenv("CLOUDXINO_TOKEN", "cxk_test")
 	t.Setenv("CLOUDXINO_API_URL", f.srv.URL+"/api")
 	waitInterval = 1
+	clusterWaitInterval = 1
 	return f
 }
 
@@ -81,6 +86,8 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		f.loadBalancers(w, r, parts, body)
 	case parts[0] == "reserved-ips":
 		f.reservedIPs(w, r, parts, body)
+	case parts[0] == "clusters":
+		f.k8sClusters(w, r, parts, body)
 	default:
 		notFound(w)
 	}
@@ -495,5 +502,130 @@ func (f *fakeAPI) reservedIPs(w http.ResponseWriter, r *http.Request, parts []st
 		rip["server_id"], rip["target_id"], rip["target_type"], rip["assigned_to"], rip["status"] = nil, nil, nil, nil, "available"
 		rip["load_balancer_id"] = nil
 		reply(w, 200, rip)
+	}
+}
+
+// k8sClusters: pending/updating clusters are active on the second look, deleting ones are gone
+// on the second look; kubeconfig and pool changes need an active cluster, like the real API.
+func (f *fakeAPI) k8sClusters(w http.ResponseWriter, r *http.Request, parts []string, body map[string]any) {
+	if len(parts) == 1 {
+		switch r.Method {
+		case "GET":
+			out := []map[string]any{}
+			for _, c := range f.clusters {
+				out = append(out, c)
+			}
+			reply(w, 200, out)
+		case "POST":
+			if body["node_size"] == "nope" {
+				reply(w, 400, map[string]any{"detail": "Unknown node size nope", "code": "bad_request"})
+				return
+			}
+			str := func(k, def string) string {
+				if v, _ := body[k].(string); v != "" {
+					return v
+				}
+				return def
+			}
+			ingress, ok := body["ingress"].(bool)
+			if !ok {
+				ingress = true
+			}
+			count := 2.0
+			if v, ok := body["node_count"].(float64); ok {
+				count = v
+			}
+			id := f.id("cks")
+			c := map[string]any{"id": id, "name": body["name"], "kubernetes_version": str("kubernetes_version", "1.36.5"),
+				"region": str("region", "dhaka-1"), "status": "pending", "project_id": str("project_id", "p1"),
+				"organization_id": "o1", "ingress": ingress, "api_endpoint": nil, "error_message": nil,
+				"created_at": "2026-11-16T10:00:00"}
+			f.clusters[id] = c
+			pid := f.id("np")
+			f.pools[pid] = map[string]any{"id": pid, "name": "default", "cluster_id": id, "size_slug": body["node_size"],
+				"count": count, "min_count": count, "max_count": count, "status": "pending"}
+			reply(w, 201, c)
+		}
+		return
+	}
+	c, ok := f.clusters[parts[1]]
+	if !ok {
+		reply(w, 404, map[string]any{"detail": "Cluster not found", "code": "not_found"})
+		return
+	}
+	id := parts[1]
+	switch {
+	case len(parts) == 2 && r.Method == "GET":
+		f.polls[id]++
+		if f.polls[id] >= 2 {
+			switch c["status"] {
+			case "pending", "provisioning", "updating":
+				if f.clusterFails {
+					c["status"], c["error_message"] = "error", "no capacity in dhaka-1"
+					break
+				}
+				c["status"], c["api_endpoint"] = "active", "https://k8s.example.com:6401"
+				for _, p := range f.pools {
+					if p["cluster_id"] == id {
+						p["status"] = "active"
+					}
+				}
+			case "deleting":
+				delete(f.clusters, id)
+				for pid, p := range f.pools {
+					if p["cluster_id"] == id {
+						delete(f.pools, pid)
+					}
+				}
+				reply(w, 404, map[string]any{"detail": "Cluster not found", "code": "not_found"})
+				return
+			}
+		}
+		reply(w, 200, c)
+	case len(parts) == 2 && r.Method == "DELETE":
+		c["status"] = "deleting"
+		f.polls[id] = 0
+		reply(w, 200, map[string]any{"message": "Cluster deletion started"})
+	case len(parts) == 3 && parts[2] == "settings":
+		if v, ok := body["name"]; ok {
+			c["name"] = v
+		}
+		if v, ok := body["project_id"]; ok {
+			c["project_id"] = v
+		}
+		reply(w, 200, c)
+	case len(parts) == 3 && parts[2] == "kubeconfig":
+		if c["status"] != "active" {
+			reply(w, 400, map[string]any{"detail": fmt.Sprintf("Cluster is not active (status: %s).", c["status"]), "code": "bad_request"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/yaml")
+		_, _ = fmt.Fprintf(w, "apiVersion: v1\nkind: Config\nclusters:\n- name: %s\n  cluster:\n    server: %s\n", c["name"], c["api_endpoint"])
+	case len(parts) == 3 && parts[2] == "nodepools":
+		out := []map[string]any{}
+		for _, p := range f.pools {
+			if p["cluster_id"] == id {
+				out = append(out, p)
+			}
+		}
+		reply(w, 200, out)
+	case len(parts) == 4 && parts[2] == "nodepools" && r.Method == "PATCH":
+		p, ok := f.pools[parts[3]]
+		if !ok || p["cluster_id"] != id {
+			reply(w, 404, map[string]any{"detail": "Node pool not found", "code": "not_found"})
+			return
+		}
+		if c["status"] != "active" {
+			reply(w, 409, map[string]any{"detail": "The cluster is " + c["status"].(string), "code": "conflict"})
+			return
+		}
+		if v, ok := body["count"]; ok {
+			p["count"], p["min_count"], p["max_count"], p["status"] = v, v, v, "scaling"
+		}
+		c["status"] = "updating"
+		f.polls[id] = 0
+		reply(w, 200, p)
+	default:
+		notFound(w)
 	}
 }

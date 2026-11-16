@@ -1,3 +1,16 @@
+## 0.1.4 (unreleased)
+
+Features:
+
+- `cloudxino_kubernetes_cluster` resource and data source: a CKS (managed Kubernetes) cluster with
+  its default node pool (`node_size`, `node_count`), `region`, `version`, `ingress`, `vpc_id` and
+  `project_id`; computed `status`, `endpoint`, `node_pool_id` and a sensitive `kubeconfig` (read
+  while the cluster is active, kept in state). `name`, `project_id` and `node_count` change in place
+  (the pool is resized and the cluster waited for); other changes replace the cluster. Import by ID;
+  the data source finds one by `name` or `id`. Example: `examples/kubernetes`.
+
+Uses cloudxino-go `Clusters` (pseudo-version until cloudxino-go v0.1.4 is tagged).
+
 ## 0.1.3 (unreleased)
 
 Features:

@@ -49,6 +49,7 @@ Full documentation is in [docs/](docs/) and on the Terraform Registry once relea
 | `cloudxino_ssh_key` | `cloudxino_ssh_key` | public keys only |
 | `cloudxino_reserved_ip` | `cloudxino_reserved_ip` | a public IPv4 the team keeps; optional `server_id`; data source by `ip_address` |
 | `cloudxino_reserved_ip_assignment` | | points a reserved IP at a server, so the address outlives a replaced server |
+| `cloudxino_kubernetes_cluster` | `cloudxino_kubernetes_cluster` | CKS: one node pool (`node_size`, `node_count`); sensitive `kubeconfig`; `name`, `project_id` and `node_count` change in place; data source by `name` |
 | | `cloudxino_project` | the default project, or one by `id` or `name` |
 | | `cloudxino_account` | the team and role of the API key |
 
@@ -60,8 +61,9 @@ Every resource can be imported with `terraform import`.
   makes a second resource.
 - Rate limits (429), maintenance (503) and gateway errors are retried with backoff, honouring
   `Retry-After`. A 503 `unavailable` (no free reserved IP) fails at once.
-- `cloudxino_server` and `cloudxino_load_balancer` wait until the resource is ready (or gone) and
-  take `timeouts`. A server whose create fails while waiting is kept in state as tainted, so the
+- `cloudxino_server`, `cloudxino_load_balancer` and `cloudxino_kubernetes_cluster` wait until the
+  resource is ready (or gone) and take `timeouts`. A cluster is polled every 15s, the API's limit
+  for reading one cluster. A server whose create fails while waiting is kept in state as tainted, so the
   next apply replaces it instead of leaving it unmanaged.
 - The API normalises firewall rules (`"443, 80"` becomes `"80,443"`, `any` becomes `0.0.0.0/0`);
   the provider keeps what you wrote when it means the same thing, so there is no perpetual diff.

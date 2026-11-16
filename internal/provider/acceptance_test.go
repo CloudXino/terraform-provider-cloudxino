@@ -6,8 +6,11 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -179,6 +182,83 @@ data "cloudxino_reserved_ip" "by_address" {
 	})
 }
 
+// TestAccKubernetesCluster builds a one-node CKS cluster, checks its kubeconfig, resizes it to two
+// nodes, imports it, reads it through the data source, then destroys it. A cluster takes about 5
+// minutes and is billed per hour, so on top of TF_ACC it needs CLOUDXINO_ACC_CKS=1. It skips when
+// the API answers 501 (CKS switched off).
+//
+//	CLOUDXINO_ACC_NODE_SIZE worker size slug (default k8s-2vcpu-4gb)
+func TestAccKubernetesCluster(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" || os.Getenv("CLOUDXINO_ACC_CKS") == "" {
+		t.Skip("set TF_ACC=1 and CLOUDXINO_ACC_CKS=1 to build a real (billed) CKS cluster")
+	}
+	if os.Getenv("CLOUDXINO_TOKEN") == "" {
+		t.Fatal("CLOUDXINO_TOKEN must be set for acceptance tests")
+	}
+	skipUnlessCKS(t)
+
+	name := "tfacc-" + strings.ToLower(acctest.RandStringFromCharSet(8, acctest.CharSetAlphaNum))
+	size := envOr("CLOUDXINO_ACC_NODE_SIZE", "k8s-2vcpu-4gb")
+	config := func(count int) string {
+		return fmt.Sprintf(`
+resource "cloudxino_kubernetes_cluster" "k" {
+  name       = %[1]q
+  node_size  = %[2]q
+  node_count = %[3]d
+}
+
+data "cloudxino_kubernetes_cluster" "by_name" {
+  name = cloudxino_kubernetes_cluster.k.name
+}
+`, name, size, count)
+	}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy:             checkAccDestroyed,
+		Steps: []resource.TestStep{
+			{
+				Config:           config(1),
+				ConfigPlanChecks: noChanges,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("cloudxino_kubernetes_cluster.k", "status", "active"),
+					resource.TestCheckResourceAttrSet("cloudxino_kubernetes_cluster.k", "endpoint"),
+					resource.TestCheckResourceAttrSet("cloudxino_kubernetes_cluster.k", "version"),
+					resource.TestMatchResourceAttr("cloudxino_kubernetes_cluster.k", "kubeconfig", regexp.MustCompile(`kind: Config`)),
+					resource.TestCheckResourceAttrPair("data.cloudxino_kubernetes_cluster.by_name", "id", "cloudxino_kubernetes_cluster.k", "id"),
+				),
+			},
+			{
+				Config:           config(2),
+				ConfigPlanChecks: noChanges,
+				Check:            resource.TestCheckResourceAttr("cloudxino_kubernetes_cluster.k", "node_count", "2"),
+			},
+			{ResourceName: "cloudxino_kubernetes_cluster.k", ImportState: true, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"timeouts", "kubeconfig", "status"}},
+		},
+	})
+}
+
+// skipUnlessCKS skips when the API has CKS switched off (creating a cluster answers 501).
+func skipUnlessCKS(t *testing.T) {
+	t.Helper()
+	c, err := accClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	// the API checks the CKS switch before anything else and refuses an unknown size (400)
+	// before it creates anything: 501 = off, anything else = on
+	_, err = c.Clusters.Create(ctx, cloudxino.CreateClusterRequest{Name: "tfacc-probe", NodeSize: "tfacc-no-such-size"})
+	var apiErr *cloudxino.APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotImplemented {
+		t.Skipf("CKS is switched off on this API: %v", err)
+	}
+	if err == nil {
+		t.Fatal("the probe created a cluster named tfacc-probe; delete it in the console")
+	}
+}
+
 // skipUnlessReservedIPs reserves an address and gives it straight back; a 503 "unavailable" skips the test.
 func skipUnlessReservedIPs(t *testing.T) {
 	t.Helper()
@@ -265,6 +345,12 @@ func checkAccDestroyed(s *terraform.State) error {
 			var ip *cloudxino.ReservedIP
 			ip, err = c.ReservedIPs.Get(ctx, id)
 			if err == nil && ip.Status != nil && *ip.Status == cloudxino.ReservedIPStatusDeleting {
+				continue
+			}
+		case "cloudxino_kubernetes_cluster":
+			var cl *cloudxino.Cluster
+			cl, err = c.Clusters.Get(ctx, id)
+			if err == nil && cl.Status == cloudxino.ClusterDeleting {
 				continue
 			}
 		default:

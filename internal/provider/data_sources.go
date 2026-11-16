@@ -407,3 +407,93 @@ func (d *reservedIPDataSource) Read(ctx context.Context, req datasource.ReadRequ
 	m.Status = strValueOrEmpty(ip.Status)
 	resp.Diagnostics.Append(resp.State.Set(ctx, m)...)
 }
+
+// --- cloudxino_kubernetes_cluster ----------------------------------------------------------------
+
+type kubernetesClusterDataSource struct{ dataSourceBase }
+
+type kubernetesClusterDSModel struct {
+	ID         types.String `tfsdk:"id"`
+	Name       types.String `tfsdk:"name"`
+	Region     types.String `tfsdk:"region"`
+	Version    types.String `tfsdk:"version"`
+	ProjectID  types.String `tfsdk:"project_id"`
+	Status     types.String `tfsdk:"status"`
+	Endpoint   types.String `tfsdk:"endpoint"`
+	Kubeconfig types.String `tfsdk:"kubeconfig"`
+}
+
+func newKubernetesClusterDataSource() datasource.DataSource { return &kubernetesClusterDataSource{} }
+
+func (d *kubernetesClusterDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_kubernetes_cluster"
+}
+
+func (d *kubernetesClusterDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Description: "A CKS cluster of the team, by `name` or `id`, with its kubeconfig (for clusters made outside this configuration).",
+		Attributes: map[string]schema.Attribute{
+			"id":         schema.StringAttribute{Optional: true, Computed: true},
+			"name":       schema.StringAttribute{Optional: true, Computed: true},
+			"region":     schema.StringAttribute{Computed: true},
+			"version":    schema.StringAttribute{Computed: true, Description: "Kubernetes version."},
+			"project_id": schema.StringAttribute{Computed: true},
+			"status":     schema.StringAttribute{Computed: true},
+			"endpoint":   schema.StringAttribute{Computed: true, Description: "The Kubernetes API address for kubectl."},
+			"kubeconfig": schema.StringAttribute{
+				Computed: true, Sensitive: true,
+				Description: "Admin kubeconfig (YAML); null unless the cluster is active.",
+			},
+		},
+	}
+}
+
+func (d *kubernetesClusterDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	var m kubernetesClusterDSModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &m)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	id := m.ID.ValueString()
+	if id == "" {
+		if m.Name.IsNull() {
+			resp.Diagnostics.AddError("Which cluster?", "Set name or id.")
+			return
+		}
+		list, err := d.client.Clusters.List(ctx, nil)
+		if err != nil {
+			apiError(&resp.Diagnostics, "list clusters", err)
+			return
+		}
+		var found []string
+		for _, cl := range list {
+			if cl.Name == m.Name.ValueString() {
+				found = append(found, cl.Id)
+			}
+		}
+		if len(found) != 1 {
+			resp.Diagnostics.AddError("Cluster not found",
+				fmt.Sprintf("The team has %d clusters named %q; use id to pick one.", len(found), m.Name.ValueString()))
+			return
+		}
+		id = found[0]
+	}
+	cl, err := d.client.Clusters.Get(ctx, id)
+	if err != nil {
+		apiError(&resp.Diagnostics, "read the cluster", err)
+		return
+	}
+	m.ID, m.Name, m.Region = types.StringValue(cl.Id), types.StringValue(cl.Name), types.StringValue(cl.Region)
+	m.Version, m.ProjectID, m.Status = types.StringValue(cl.KubernetesVersion), types.StringValue(cl.ProjectId), types.StringValue(cl.Status)
+	m.Endpoint = strValue(cl.ApiEndpoint)
+	m.Kubeconfig = types.StringNull()
+	if cl.Status == cloudxino.ClusterActive {
+		kc, err := d.client.Clusters.Kubeconfig(ctx, id)
+		if err != nil {
+			apiError(&resp.Diagnostics, "read the kubeconfig", err)
+			return
+		}
+		m.Kubeconfig = types.StringValue(kc)
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, m)...)
+}

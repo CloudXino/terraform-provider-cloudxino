@@ -238,6 +238,96 @@ data "cloudxino_kubernetes_cluster" "by_name" {
 	})
 }
 
+// TestAccContainerHost builds a Starter MCS host with a small nginx compose file and one env var,
+// changes the env var (a second deployment), imports it and reads it through the data sources,
+// then destroys it. A host takes about 5 minutes and is billed per hour (server + management
+// fee), so on top of TF_ACC it needs CLOUDXINO_ACC_MCS=1. It skips when ordering hosts is
+// switched off (GET /v1/container-hosts/options answers enabled=false). No domains: they need DNS.
+//
+//	CLOUDXINO_ACC_MCS_PLAN plan slug (default s-1vcpu-2gb, the smallest)
+func TestAccContainerHost(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" || os.Getenv("CLOUDXINO_ACC_MCS") == "" {
+		t.Skip("set TF_ACC=1 and CLOUDXINO_ACC_MCS=1 to build a real (billed) container host")
+	}
+	if os.Getenv("CLOUDXINO_TOKEN") == "" {
+		t.Fatal("CLOUDXINO_TOKEN must be set for acceptance tests")
+	}
+	skipUnlessMCS(t)
+
+	name := "tfacc-" + strings.ToLower(acctest.RandStringFromCharSet(8, acctest.CharSetAlphaNum))
+	plan := envOr("CLOUDXINO_ACC_MCS_PLAN", "s-1vcpu-2gb")
+	config := func(greeting string) string {
+		return fmt.Sprintf(`
+resource "cloudxino_container_host" "h" {
+  name    = %[1]q
+  plan    = %[2]q
+  compose = <<-EOT
+    services:
+      web:
+        image: nginx:1.27-alpine
+        environment:
+          GREETING: $${GREETING}
+  EOT
+  env = {
+    GREETING = %[3]q
+  }
+}
+
+data "cloudxino_container_host" "by_name" {
+  name = cloudxino_container_host.h.name
+}
+
+data "cloudxino_container_host_plans" "all" {}
+`, name, plan, greeting)
+	}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		CheckDestroy:             checkAccDestroyed,
+		Steps: []resource.TestStep{
+			{
+				Config:           config("hello"),
+				ConfigPlanChecks: noChanges,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("cloudxino_container_host.h", "status", "ready"),
+					resource.TestCheckResourceAttrSet("cloudxino_container_host.h", "ip_address"),
+					resource.TestMatchResourceAttr("cloudxino_container_host.h", "portainer_url", regexp.MustCompile(`^https://`)),
+					resource.TestCheckResourceAttr("cloudxino_container_host.h", "last_deployment.status", "succeeded"),
+					resource.TestCheckResourceAttrPair("data.cloudxino_container_host.by_name", "id", "cloudxino_container_host.h", "id"),
+					resource.TestCheckResourceAttr("data.cloudxino_container_host_plans.all", "enabled", "true"),
+				),
+			},
+			{
+				Config:           config("bonjour"),
+				ConfigPlanChecks: noChanges,
+				Check:            resource.TestCheckResourceAttr("cloudxino_container_host.h", "last_deployment.status", "succeeded"),
+			},
+			{
+				ResourceName: "cloudxino_container_host.h", ImportState: true, ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{"timeouts", "compose", "env", "domains"},
+			},
+		},
+	})
+}
+
+// skipUnlessMCS skips when ordering container hosts is switched off on the API.
+func skipUnlessMCS(t *testing.T) {
+	t.Helper()
+	c, err := accClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	o, err := c.ContainerHosts.Options(ctx)
+	if err != nil {
+		t.Fatalf("reading the container host options: %v", err)
+	}
+	if !o.Enabled {
+		t.Skip("Managed Container Service is switched off on this API (mcs.enabled)")
+	}
+}
+
 // skipUnlessCKS skips when the API has CKS switched off (creating a cluster answers 501).
 func skipUnlessCKS(t *testing.T) {
 	t.Helper()
@@ -345,6 +435,12 @@ func checkAccDestroyed(s *terraform.State) error {
 			var ip *cloudxino.ReservedIP
 			ip, err = c.ReservedIPs.Get(ctx, id)
 			if err == nil && ip.Status != nil && *ip.Status == cloudxino.ReservedIPStatusDeleting {
+				continue
+			}
+		case "cloudxino_container_host":
+			var h *cloudxino.ContainerHost
+			h, err = c.ContainerHosts.Get(ctx, id)
+			if err == nil && (h.Status == cloudxino.ContainerHostDeleting || h.Status == cloudxino.ContainerHostDeleted) {
 				continue
 			}
 		case "cloudxino_kubernetes_cluster":

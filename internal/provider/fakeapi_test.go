@@ -27,6 +27,7 @@ type fakeAPI struct {
 	clusters     map[string]map[string]any
 	pools        map[string]map[string]any // pool id -> pool (with "cluster_id")
 	clusterFails bool                      // new clusters end in "error" instead of "active"
+	mcs          *fakeMCS                  // container hosts (fake_container_hosts_test.go)
 	srv          *httptest.Server
 }
 
@@ -37,6 +38,7 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		lbs: map[string]map[string]any{}, rips: map[string]map[string]any{},
 		clusters: map[string]map[string]any{}, pools: map[string]map[string]any{},
 	}
+	f.mcs = newFakeMCS()
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	t.Setenv("CLOUDXINO_TOKEN", "cxk_test")
@@ -88,6 +90,8 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		f.reservedIPs(w, r, parts, body)
 	case parts[0] == "clusters":
 		f.k8sClusters(w, r, parts, body)
+	case parts[0] == "container-hosts":
+		f.containerHosts(w, r, parts, body)
 	default:
 		notFound(w)
 	}

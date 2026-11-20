@@ -1,3 +1,22 @@
+## 0.1.5 (Unreleased)
+
+Features:
+
+- `cloudxino_container_host` resource: a Managed Container Service host (a CC2 server with Docker,
+  Compose, Traefik with Let's Encrypt, and Portainer) with `name`, `plan`, `region`, `project_id`
+  and optional `compose`, `env` (sensitive) and `domains`. Create waits until the host is ready,
+  then deploys `compose` with `env` and `domains` in one deployment and waits for it. A `plan`
+  change resizes the server in place. A `compose`, `env` or `domains` change deploys again and
+  waits; a failed deployment fails the apply with the end of the compose output. `name`,
+  `region` and `project_id` replace the host. `compose`, `env` and `domains` are managed only when
+  set, so a host can also take its deployments from CI (`cxctl containers deploy`). Computed:
+  `ip_address`, `portainer_url`, `status` and `last_deployment`. Import by ID. Example:
+  `examples/containers`.
+- `cloudxino_container_host` data source (by `name` or `id`) and `cloudxino_container_host_plans`
+  data source (the plans with their monthly prices).
+
+Uses cloudxino-go v0.1.5 (the `ContainerHosts` service).
+
 ## 0.1.4 (November 16, 2026)
 
 Features:

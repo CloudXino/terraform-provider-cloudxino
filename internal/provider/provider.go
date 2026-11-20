@@ -38,7 +38,7 @@ func (p *cloudxinoProvider) Metadata(_ context.Context, _ provider.MetadataReque
 
 func (p *cloudxinoProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manage CloudXino resources: CC2 servers, Cloud Firewalls, load balancers, reserved IPs, Kubernetes (CKS) clusters, DNS and SSH keys.",
+		Description: "Manage CloudXino resources: CC2 servers, Cloud Firewalls, load balancers, reserved IPs, Kubernetes (CKS) clusters, managed container hosts (MCS), DNS and SSH keys.",
 		Attributes: map[string]schema.Attribute{
 			"token": schema.StringAttribute{
 				Description: "API key (Account → API keys in the console). Defaults to the CLOUDXINO_TOKEN environment variable.",
@@ -101,6 +101,7 @@ func (p *cloudxinoProvider) Resources(_ context.Context) []func() resource.Resou
 		newReservedIPResource,
 		newReservedIPAssignmentResource,
 		newKubernetesClusterResource,
+		newContainerHostResource,
 	}
 }
 
@@ -113,5 +114,7 @@ func (p *cloudxinoProvider) DataSources(_ context.Context) []func() datasource.D
 		newDNSZoneDataSource,
 		newReservedIPDataSource,
 		newKubernetesClusterDataSource,
+		newContainerHostDataSource,
+		newContainerHostPlansDataSource,
 	}
 }

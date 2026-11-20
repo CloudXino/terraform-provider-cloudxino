@@ -3,12 +3,12 @@
 page_title: "cloudxino Provider"
 subcategory: ""
 description: |-
-  Manage CloudXino resources: CC2 servers, Cloud Firewalls, load balancers, reserved IPs, Kubernetes (CKS) clusters, DNS and SSH keys.
+  Manage CloudXino resources: CC2 servers, Cloud Firewalls, load balancers, reserved IPs, Kubernetes (CKS) clusters, managed container hosts (MCS), DNS and SSH keys.
 ---
 
 # cloudxino Provider
 
-Manage CloudXino resources: CC2 servers, Cloud Firewalls, load balancers, reserved IPs, Kubernetes (CKS) clusters, DNS and SSH keys.
+Manage CloudXino resources: CC2 servers, Cloud Firewalls, load balancers, reserved IPs, Kubernetes (CKS) clusters, managed container hosts (MCS), DNS and SSH keys.
 
 ## Example Usage
 

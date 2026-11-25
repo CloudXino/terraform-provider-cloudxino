@@ -32,7 +32,9 @@ data "cloudxino_container_host" "apps" {
 - `domains` (Attributes List) (see [below for nested schema](#nestedatt--domains))
 - `env_keys` (List of String) Names of the saved environment variables (not their values).
 - `id` (String) The ID of this resource.
-- `ip_address` (String) Public IPv4 address; point domains' A records here.
+- `ingress_ip` (String) Point domains' A records here: the server's IP, or the NAT web proxy's for a NAT host.
+- `ip_address` (String) The server's IPv4 address (172.16.x for a NAT host).
+- `ip_type` (String) `public` or `nat`.
 - `last_deployment` (Attributes) The newest deployment; null before the first. (see [below for nested schema](#nestedatt--last_deployment))
 - `plan` (String) Plan slug (a CC2 size).
 - `portainer_url` (String)

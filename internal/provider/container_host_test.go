@@ -61,6 +61,8 @@ func TestContainerHost(t *testing.T) {
 					resource.TestCheckResourceAttr("cloudxino_container_host.h", "region", "dhaka-1"),
 					resource.TestCheckResourceAttr("cloudxino_container_host.h", "project_id", "p1"),
 					resource.TestMatchResourceAttr("cloudxino_container_host.h", "ip_address", regexp.MustCompile(`^203\.0\.113\.\d+$`)),
+					resource.TestCheckResourceAttr("cloudxino_container_host.h", "ip_type", "public"),
+					resource.TestCheckResourceAttrPair("cloudxino_container_host.h", "ingress_ip", "cloudxino_container_host.h", "ip_address"),
 					resource.TestMatchResourceAttr("cloudxino_container_host.h", "portainer_url", regexp.MustCompile(`^https://203-0-113-\d+\.sslip\.io$`)),
 					resource.TestCheckResourceAttr("cloudxino_container_host.h", "last_deployment.number", "1"),
 					resource.TestCheckResourceAttr("cloudxino_container_host.h", "last_deployment.status", "succeeded"),
@@ -388,6 +390,64 @@ func TestContainerRegistryDataSource(t *testing.T) {
 			{
 				Config:      `data "cloudxino_container_registry" "x" {}`,
 				ExpectError: regexp.MustCompile(`Set id or name`),
+			},
+		},
+	})
+}
+
+func natHostConfig(ipType string) string {
+	return fmt.Sprintf(`
+resource "cloudxino_container_host" "h" {
+  name    = "apps"
+  plan    = "s-1vcpu-2gb"
+  ip_type = %q
+  compose = %q
+  domains = [
+    { domain = "app.example.com", service = "web", port = 80 },
+  ]
+}
+
+data "cloudxino_container_host" "by_id" {
+  id = cloudxino_container_host.h.id
+}
+`, ipType, goodCompose)
+}
+
+func TestContainerHostNat(t *testing.T) {
+	f := newFakeAPI(t)
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config:           natHostConfig("nat"),
+				ConfigPlanChecks: noChanges,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("cloudxino_container_host.h", "ip_type", "nat"),
+					resource.TestCheckResourceAttr("cloudxino_container_host.h", "ingress_ip", "103.143.148.30"),
+					resource.TestMatchResourceAttr("cloudxino_container_host.h", "ip_address", regexp.MustCompile(`^172\.16\.0\.\d+$`)),
+					resource.TestMatchResourceAttr("cloudxino_container_host.h", "portainer_url", regexp.MustCompile(`^https://mcs-.+\.103-143-148-30\.sslip\.io$`)),
+					resource.TestCheckResourceAttr("data.cloudxino_container_host.by_id", "ip_type", "nat"),
+					resource.TestCheckResourceAttr("data.cloudxino_container_host.by_id", "ingress_ip", "103.143.148.30"),
+					func(*terraform.State) error {
+						for _, h := range f.mcs.hosts {
+							if h["ip_type"] != "nat" {
+								return fmt.Errorf("created with ip_type %v", h["ip_type"])
+							}
+						}
+						return nil
+					},
+				),
+			},
+			{
+				// the IP type is fixed at creation: a change replaces the host
+				Config: natHostConfig("public"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("cloudxino_container_host.h", plancheck.ResourceActionReplace),
+				}},
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("cloudxino_container_host.h", "ip_type", "public"),
+					resource.TestMatchResourceAttr("cloudxino_container_host.h", "ingress_ip", regexp.MustCompile(`^203\.0\.113\.\d+$`)),
+				),
 			},
 		},
 	})

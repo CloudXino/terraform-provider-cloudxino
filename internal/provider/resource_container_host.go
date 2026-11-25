@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -35,11 +36,13 @@ type containerHostModel struct {
 	Plan           types.String   `tfsdk:"plan"`
 	Region         types.String   `tfsdk:"region"`
 	ProjectID      types.String   `tfsdk:"project_id"`
+	IPType         types.String   `tfsdk:"ip_type"`
 	Compose        types.String   `tfsdk:"compose"`
 	Env            types.Map      `tfsdk:"env"`
 	Domains        types.List     `tfsdk:"domains"`
 	RegistryIDs    types.Set      `tfsdk:"registry_ids"`
 	IPAddress      types.String   `tfsdk:"ip_address"`
+	IngressIP      types.String   `tfsdk:"ingress_ip"`
 	PortainerURL   types.String   `tfsdk:"portainer_url"`
 	Status         types.String   `tfsdk:"status"`
 	LastDeployment types.Object   `tfsdk:"last_deployment"`
@@ -98,6 +101,14 @@ func (r *containerHostResource) Schema(ctx context.Context, _ resource.SchemaReq
 				Optional: true, Computed: true, PlanModifiers: keepReplace,
 				Description: "Left out = the team's default project. Changing it replaces the host (the API cannot move one).",
 			},
+			"ip_type": schema.StringAttribute{
+				Optional: true, Computed: true, Default: stringdefault.StaticString("public"),
+				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				Validators:    []validator.String{oneOf("public", "nat")},
+				Description: "`public` (default): the server gets its own IPv4. `nat`: no public IP (a lower price); the host's " +
+					"domains are reached on ports 80 and 443 through the shared NAT web proxy, so their A records point at " +
+					"`ingress_ip`, and a NAT host takes fewer domains (9 by default). Changing it replaces the host.",
+			},
 			"compose": schema.StringAttribute{
 				Optional: true,
 				Description: "The `docker-compose.yml` to deploy, e.g. `file(\"docker-compose.yml\")`. Ports 80 and 443 belong to " +
@@ -111,7 +122,7 @@ func (r *containerHostResource) Schema(ctx context.Context, _ resource.SchemaReq
 			"domains": schema.ListNestedAttribute{
 				Optional: true,
 				Description: "Domains served over HTTPS by Traefik, each routed to a compose service's port. Each domain's A " +
-					"record must point at `ip_address` for its certificate to be issued. Replaces all of the host's domains; " +
+					"record must point at `ingress_ip` for its certificate to be issued. Replaces all of the host's domains; " +
 					"`[]` removes them. Left out = not managed by Terraform.",
 				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
 					"domain": schema.StringAttribute{
@@ -131,7 +142,11 @@ func (r *containerHostResource) Schema(ctx context.Context, _ resource.SchemaReq
 			},
 			"ip_address": schema.StringAttribute{
 				Computed: true, PlanModifiers: keep,
-				Description: "The host's public IPv4 address: point your domains' A records here.",
+				Description: "The server's IPv4 address: public for `ip_type = \"public\"`, a private 172.16.x address for `nat`.",
+			},
+			"ingress_ip": schema.StringAttribute{
+				Computed: true, PlanModifiers: keep,
+				Description: "Point your domains' A records here: the server's own IP for a public host, the shared NAT web proxy's IP for a NAT host.",
 			},
 			"portainer_url": schema.StringAttribute{
 				Computed: true, PlanModifiers: keep,
@@ -218,18 +233,36 @@ func (m *containerHostModel) fill(h *cloudxino.ContainerHost) {
 		m.Region = types.StringValue(h.Server.Region)
 	}
 	m.ProjectID = types.StringValue(h.ProjectId)
+	m.IPType = types.StringValue(ipTypeOf(h))
 	m.Status = types.StringValue(h.Status)
 	m.PortainerURL = types.StringValue(h.PortainerUrl)
 	if h.Server.IpAddress != "" {
 		m.IPAddress = types.StringValue(h.Server.IpAddress)
 	}
+	m.IngressIP = types.StringValue(ingressIPOf(h))
 	m.LastDeployment = deploymentObject(h.LastDeployment)
 	m.CreatedAt = strValue(h.CreatedAt)
-	for _, v := range []*types.String{&m.Region, &m.IPAddress} {
+	for _, v := range []*types.String{&m.Region, &m.IPAddress, &m.IngressIP} {
 		if v.IsUnknown() {
 			*v = types.StringNull()
 		}
 	}
+}
+
+// ipTypeOf: consoles from before NAT hosts leave ip_type out; their hosts are all public.
+func ipTypeOf(h *cloudxino.ContainerHost) string {
+	if h.IpType == "" {
+		return cloudxino.ContainerHostIpPublic
+	}
+	return h.IpType
+}
+
+// ingressIPOf: where domains point; the server's IP when the console does not say (before NAT hosts).
+func ingressIPOf(h *cloudxino.ContainerHost) string {
+	if h.IngressIp != nil && *h.IngressIp != "" {
+		return *h.IngressIp
+	}
+	return h.Server.IpAddress
 }
 
 // readManaged reads back compose, env and domains, but only the ones Terraform manages.
@@ -351,6 +384,7 @@ func (r *containerHostResource) Create(ctx context.Context, req resource.CreateR
 		Plan:      plan.Plan.ValueString(),
 		Region:    optString(plan.Region),
 		ProjectId: optString(plan.ProjectID),
+		IpType:    plan.IPType.ValueString(),
 	})
 	if err != nil {
 		apiError(&resp.Diagnostics, "create the container host", err)

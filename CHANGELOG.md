@@ -1,3 +1,18 @@
+## 0.1.7 (Unreleased)
+
+Features:
+
+- `cloudxino_container_host`: optional `ip_type`, `public` (default) or `nat`. A NAT host has no
+  public IP (a lower price); its domains reach it on ports 80 and 443 through the shared NAT web
+  proxy, and the console registers each of them (and Portainer's hostname) there. Changing it
+  replaces the host. New computed `ingress_ip`: the IP to point domains' A records at (the
+  server's own IP, or the NAT web proxy's). For a NAT host `ip_address` is the server's private
+  172.16.x address.
+- `cloudxino_container_host` data source: `ip_type` and `ingress_ip`.
+- `cloudxino_container_host_plans` data source: `nat_per_month` on each plan.
+
+Uses cloudxino-go v0.1.7 (`CreateContainerHostRequest.IpType`, `ContainerHost.IngressIp`).
+
 ## 0.1.6 (Unreleased)
 
 Features:

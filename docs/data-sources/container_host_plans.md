@@ -38,6 +38,7 @@ Read-Only:
 - `disk_gb` (Number)
 - `fee_per_month` (Number) The management fee (BDT).
 - `memory_gb` (Number)
+- `nat_per_month` (Number) Server plus fee for a NAT host (`ip_type = "nat"`, no public IP) (BDT); 0 when the API does not say.
 - `per_hour` (Number) Server plus fee per hour (BDT).
 - `per_month` (Number) Server plus fee (BDT).
 - `server_per_month` (Number) The server's price (BDT).

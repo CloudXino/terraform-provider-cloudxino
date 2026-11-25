@@ -3,7 +3,7 @@ module github.com/cloudxino/terraform-provider-cloudxino
 go 1.24.7
 
 require (
-	github.com/cloudxino/cloudxino-go v0.1.5
+	github.com/cloudxino/cloudxino-go v0.1.6-0.20261125103813-a95f76c7faa5
 	github.com/hashicorp/terraform-plugin-framework v1.13.0
 	github.com/hashicorp/terraform-plugin-framework-timeouts v0.4.1
 	github.com/hashicorp/terraform-plugin-go v0.25.0

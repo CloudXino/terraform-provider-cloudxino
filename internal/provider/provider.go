@@ -116,5 +116,6 @@ func (p *cloudxinoProvider) DataSources(_ context.Context) []func() datasource.D
 		newKubernetesClusterDataSource,
 		newContainerHostDataSource,
 		newContainerHostPlansDataSource,
+		newContainerRegistryDataSource,
 	}
 }

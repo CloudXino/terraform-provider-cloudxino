@@ -15,12 +15,18 @@ type fakeMCS struct {
 	env         map[string]map[string]string // host id -> env
 	deployments map[string][]map[string]any  // host id -> deployments, oldest first
 	polls       map[string]int
-	failInstall bool // new hosts end "failed"
+	failInstall bool             // new hosts end "failed"
+	registries  []map[string]any // Container Hub registries (GET /v1/registries)
 }
 
 func newFakeMCS() *fakeMCS {
 	return &fakeMCS{hosts: map[string]map[string]any{}, env: map[string]map[string]string{},
-		deployments: map[string][]map[string]any{}, polls: map[string]int{}}
+		deployments: map[string][]map[string]any{}, polls: map[string]int{},
+		registries: []map[string]any{
+			{"id": "reg-1", "name": "ai-platform", "region": "dhaka-1", "endpoint": "cch.example.com/ai-platform-x", "status": "active",
+				"project_id": "p1", "harbor_robot_token": "secret", "harbor_robot_name": "robot$ai-platform-x+r"},
+			{"id": "reg-2", "name": "other", "region": "dhaka-1", "endpoint": "hub.example.net/other-y", "status": "active", "project_id": "p1"},
+		}}
 }
 
 var mcsPlans = []map[string]any{
@@ -91,7 +97,7 @@ func (f *fakeAPI) containerHosts(w http.ResponseWriter, r *http.Request, parts [
 			h := map[string]any{"id": id, "name": body["name"], "plan": plan, "status": "creating", "error": nil,
 				"project_id": str("project_id", "p1"), "instance_id": "i-" + id,
 				"server":        map[string]any{"status": "creating", "ip_address": ip, "region": str("region", "dhaka-1"), "cpu": 2, "memory": 4096, "disk": 80},
-				"portainer_url": "https://" + strings.ReplaceAll(ip, ".", "-") + ".sslip.io", "domains": []any{},
+				"portainer_url": "https://" + strings.ReplaceAll(ip, ".", "-") + ".sslip.io", "domains": []any{}, "registry_ids": []any{},
 				"compose": nil, "created_at": "2026-11-20T10:00:00+00:00"}
 			m.hosts[id] = h
 			m.env[id] = map[string]string{}
@@ -201,6 +207,21 @@ func (f *fakeAPI) containerHosts(w http.ResponseWriter, r *http.Request, parts [
 		}
 		h["domains"] = domains
 		reply(w, 200, map[string]any{"domains": domains, "deployment": nil})
+	case len(parts) == 3 && parts[2] == "registries":
+		ids := []any{}
+		for _, raw := range body["registry_ids"].([]any) {
+			known := false
+			for _, reg := range m.registries {
+				known = known || reg["id"] == raw
+			}
+			if !known {
+				reply(w, 400, map[string]any{"detail": "Choose active Container Hub registries of your organization.", "code": "bad_request"})
+				return
+			}
+			ids = append(ids, raw)
+		}
+		h["registry_ids"] = ids
+		reply(w, 200, map[string]any{"registry_ids": ids, "deployment": nil})
 	case len(parts) == 3 && parts[2] == "deploy":
 		if ready() {
 			note, _ := body["note"].(string)

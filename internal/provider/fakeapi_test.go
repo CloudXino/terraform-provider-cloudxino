@@ -92,6 +92,8 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		f.k8sClusters(w, r, parts, body)
 	case parts[0] == "container-hosts":
 		f.containerHosts(w, r, parts, body)
+	case parts[0] == "registries" && len(parts) == 1 && r.Method == "GET":
+		reply(w, 200, f.mcs.registries)
 	default:
 		notFound(w)
 	}

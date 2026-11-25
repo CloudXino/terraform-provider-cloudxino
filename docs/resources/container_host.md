@@ -4,14 +4,14 @@ page_title: "cloudxino_container_host Resource - cloudxino"
 subcategory: ""
 description: |-
   A Managed Container Service (MCS) host: a CC2 server of the team's own with Docker, Docker Compose, Traefik (automatic Let's Encrypt certificates) and Portainer, with a docker-compose.yml deployed to it. Billed per hour from the team's wallet (the server plus the management fee) until destroyed.
-  Creating one takes about 5 minutes; when compose is set it is deployed as soon as the host is ready. A change to compose, env or domains deploys again and waits for the deployment to finish. compose, env and domains are managed only when set: leave one out to manage it elsewhere (for example cxctl containers deploy from CI).
+  Creating one takes about 5 minutes; when compose is set it is deployed as soon as the host is ready. A change to compose, env, domains or registry_ids deploys again and waits for the deployment to finish. compose, env, domains and registry_ids are managed only when set: leave one out to manage it elsewhere (for example cxctl containers deploy from CI).
 ---
 
 # cloudxino_container_host (Resource)
 
 A Managed Container Service (MCS) host: a CC2 server of the team's own with Docker, Docker Compose, Traefik (automatic Let's Encrypt certificates) and Portainer, with a `docker-compose.yml` deployed to it. Billed per hour from the team's wallet (the server plus the management fee) until destroyed.
 
-Creating one takes about 5 minutes; when `compose` is set it is deployed as soon as the host is ready. A change to `compose`, `env` or `domains` deploys again and waits for the deployment to finish. `compose`, `env` and `domains` are managed only when set: leave one out to manage it elsewhere (for example `cxctl containers deploy` from CI).
+Creating one takes about 5 minutes; when `compose` is set it is deployed as soon as the host is ready. A change to `compose`, `env`, `domains` or `registry_ids` deploys again and waits for the deployment to finish. `compose`, `env`, `domains` and `registry_ids` are managed only when set: leave one out to manage it elsewhere (for example `cxctl containers deploy` from CI).
 
 ## Example Usage
 
@@ -57,6 +57,7 @@ output "ip_address" {
 - `env` (Map of String, Sensitive) Environment variables for every service (also usable as `${NAME}` in the compose file). Replaces all of the host's variables; kept encrypted by the API, and in the Terraform state. Left out = not managed by Terraform.
 - `project_id` (String) Left out = the team's default project. Changing it replaces the host (the API cannot move one).
 - `region` (String) Region ID; left out = the default region. Changing it replaces the host.
+- `registry_ids` (Set of String) Container Hub registries (IDs, e.g. from the `cloudxino_container_registry` data source) the host logs in to before every `docker compose pull`, so the compose file can use private images (`<endpoint>/<image>:<tag>`). Docker keeps one login per registry server: at most one registry per server. `[]` removes the logins. Left out = not managed by Terraform.
 - `timeouts` (Attributes) (see [below for nested schema](#nestedatt--timeouts))
 
 ### Read-Only

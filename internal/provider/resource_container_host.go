@@ -38,6 +38,7 @@ type containerHostModel struct {
 	Compose        types.String   `tfsdk:"compose"`
 	Env            types.Map      `tfsdk:"env"`
 	Domains        types.List     `tfsdk:"domains"`
+	RegistryIDs    types.Set      `tfsdk:"registry_ids"`
 	IPAddress      types.String   `tfsdk:"ip_address"`
 	PortainerURL   types.String   `tfsdk:"portainer_url"`
 	Status         types.String   `tfsdk:"status"`
@@ -75,8 +76,8 @@ func (r *containerHostResource) Schema(ctx context.Context, _ resource.SchemaReq
 			"Compose, Traefik (automatic Let's Encrypt certificates) and Portainer, with a `docker-compose.yml` " +
 			"deployed to it. Billed per hour from the team's wallet (the server plus the management fee) until destroyed.\n\n" +
 			"Creating one takes about 5 minutes; when `compose` is set it is deployed as soon as the host is ready. " +
-			"A change to `compose`, `env` or `domains` deploys again and waits for the deployment to finish. " +
-			"`compose`, `env` and `domains` are managed only when set: leave one out to manage it elsewhere (for " +
+			"A change to `compose`, `env`, `domains` or `registry_ids` deploys again and waits for the deployment to finish. " +
+			"`compose`, `env`, `domains` and `registry_ids` are managed only when set: leave one out to manage it elsewhere (for " +
 			"example `cxctl containers deploy` from CI).",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{Computed: true, PlanModifiers: keep},
@@ -120,6 +121,13 @@ func (r *containerHostResource) Schema(ctx context.Context, _ resource.SchemaReq
 					"service": schema.StringAttribute{Required: true, Description: "A service in the compose file."},
 					"port":    schema.Int64Attribute{Required: true, Description: "The port the service listens on inside its container."},
 				}},
+			},
+			"registry_ids": schema.SetAttribute{
+				ElementType: types.StringType, Optional: true,
+				Description: "Container Hub registries (IDs, e.g. from the `cloudxino_container_registry` data source) the host " +
+					"logs in to before every `docker compose pull`, so the compose file can use private images " +
+					"(`<endpoint>/<image>:<tag>`). Docker keeps one login per registry server: at most one registry per server. " +
+					"`[]` removes the logins. Left out = not managed by Terraform.",
 			},
 			"ip_address": schema.StringAttribute{
 				Computed: true, PlanModifiers: keep,
@@ -183,6 +191,14 @@ func envFrom(ctx context.Context, v types.Map, diags *diag.Diagnostics) map[stri
 	return out
 }
 
+func stringSet(items []string) types.Set {
+	vals := []attr.Value{}
+	for _, v := range items {
+		vals = append(vals, types.StringValue(v))
+	}
+	return types.SetValueMust(types.StringType, vals)
+}
+
 func envMap(env map[string]string) types.Map {
 	vals := map[string]attr.Value{}
 	for k, v := range env {
@@ -224,6 +240,9 @@ func (r *containerHostResource) readManaged(ctx context.Context, m *containerHos
 	if managed(m.Domains) {
 		m.Domains = domainsList(h.Domains)
 	}
+	if managed(m.RegistryIDs) {
+		m.RegistryIDs = stringSet(h.RegistryIds)
+	}
 	if managed(m.Env) {
 		env, err := r.client.ContainerHosts.GetEnv(ctx, h.Id)
 		if err != nil {
@@ -261,6 +280,18 @@ func (r *containerHostResource) apply(ctx context.Context, id string, plan, stat
 		}
 		changed = true
 	}
+	if managed(plan.RegistryIDs) && (state == nil || !plan.RegistryIDs.Equal(state.RegistryIDs)) {
+		ids := []string{}
+		diags.Append(plan.RegistryIDs.ElementsAs(ctx, &ids, false)...)
+		if diags.HasError() {
+			return
+		}
+		if _, err := r.client.ContainerHosts.SetRegistries(ctx, id, ids, false); err != nil {
+			apiError(diags, "save the Container Hub registries", err)
+			return
+		}
+		changed = true
+	}
 	req := cloudxino.DeployRequest{Note: ptr(deploymentNote)}
 	if managed(plan.Compose) {
 		if state == nil || !plan.Compose.Equal(state.Compose) {
@@ -272,7 +303,7 @@ func (r *containerHostResource) apply(ctx context.Context, id string, plan, stat
 		return
 	}
 	if req.Compose == nil {
-		// env or domains changed and the compose file is managed elsewhere: deploy the saved one, if any
+		// env, domains or registries changed and the compose file is managed elsewhere: deploy the saved one, if any
 		h, err := r.client.ContainerHosts.Get(ctx, id)
 		if err != nil {
 			apiError(diags, "read the container host", err)
@@ -332,6 +363,7 @@ func (r *containerHostResource) Create(ctx context.Context, req resource.CreateR
 	state.Compose = types.StringNull()
 	state.Env = types.MapNull(types.StringType)
 	state.Domains = types.ListNull(types.ObjectType{AttrTypes: containerDomainTypes})
+	state.RegistryIDs = types.SetNull(types.StringType)
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
 
 	ready, err := r.client.ContainerHosts.WaitReady(ctx, h.Id, &cloudxino.WaitOptions{Interval: waitInterval})

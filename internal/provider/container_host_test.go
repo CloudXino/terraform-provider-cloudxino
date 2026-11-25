@@ -302,3 +302,93 @@ func TestContainerHostDataSourceNeedsOneMatch(t *testing.T) {
 		},
 	})
 }
+
+// registry_ids: chosen by the registry data source, saved before the deployment, and a change
+// deploys again; [] removes the logins.
+func TestContainerHostRegistries(t *testing.T) {
+	f := newFakeAPI(t)
+	config := func(ids string) string {
+		return fmt.Sprintf(`
+data "cloudxino_container_registry" "hub" { name = "ai-platform" }
+
+resource "cloudxino_container_host" "h" {
+  name         = "apps"
+  plan         = "s-1vcpu-2gb"
+  compose      = %q
+  registry_ids = %s
+}
+`, goodCompose, ids)
+	}
+	hostRegistries := func(want ...string) resource.TestCheckFunc {
+		return func(*terraform.State) error {
+			for _, h := range f.mcs.hosts {
+				if got := fmt.Sprint(h["registry_ids"]); got != fmt.Sprint(want) {
+					return fmt.Errorf("host registry_ids %s, want %v", got, want)
+				}
+			}
+			return nil
+		}
+	}
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config:           config("[data.cloudxino_container_registry.hub.id]"),
+				ConfigPlanChecks: noChanges,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("data.cloudxino_container_registry.hub", "id", "reg-1"),
+					resource.TestCheckResourceAttr("data.cloudxino_container_registry.hub", "endpoint", "cch.example.com/ai-platform-x"),
+					resource.TestCheckResourceAttr("data.cloudxino_container_registry.hub", "status", "active"),
+					resource.TestCheckResourceAttr("cloudxino_container_host.h", "registry_ids.#", "1"),
+					resource.TestCheckTypeSetElemAttr("cloudxino_container_host.h", "registry_ids.*", "reg-1"),
+					hostRegistries("reg-1"),
+					checkDeployments(f, 1),
+				),
+			},
+			{
+				// no change: no new deployment
+				Config:           config("[data.cloudxino_container_registry.hub.id]"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}},
+				Check:            checkDeployments(f, 1),
+			},
+			{
+				Config:           config(`[data.cloudxino_container_registry.hub.id, "reg-2"]`),
+				ConfigPlanChecks: noChanges,
+				Check:            resource.ComposeTestCheckFunc(hostRegistries("reg-1", "reg-2"), checkDeployments(f, 2)),
+			},
+			{
+				Config:           config("[]"),
+				ConfigPlanChecks: noChanges,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("cloudxino_container_host.h", "registry_ids.#", "0"),
+					hostRegistries(), checkDeployments(f, 3),
+				),
+			},
+			{
+				Config:      config(`["nope"]`),
+				ExpectError: regexp.MustCompile(`active Container Hub registries`),
+			},
+		},
+	})
+}
+
+func TestContainerRegistryDataSource(t *testing.T) {
+	newFakeAPI(t)
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: factories,
+		Steps: []resource.TestStep{
+			{
+				Config: `data "cloudxino_container_registry" "x" { id = "reg-2" }`,
+				Check:  resource.TestCheckResourceAttr("data.cloudxino_container_registry.x", "name", "other"),
+			},
+			{
+				Config:      `data "cloudxino_container_registry" "x" { name = "missing" }`,
+				ExpectError: regexp.MustCompile(`not found`),
+			},
+			{
+				Config:      `data "cloudxino_container_registry" "x" {}`,
+				ExpectError: regexp.MustCompile(`Set id or name`),
+			},
+		},
+	})
+}

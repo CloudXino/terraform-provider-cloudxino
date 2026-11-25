@@ -1,3 +1,16 @@
+## 0.1.6 (Unreleased)
+
+Features:
+
+- `cloudxino_container_host`: optional `registry_ids`, the Container Hub registries the host logs in
+  to before every `docker compose pull`, so `compose` can use private images. Saved before the
+  deployment; a change deploys again; `[]` removes the logins. At most one registry per registry
+  server (Docker keeps one login per server). Managed only when set.
+- `cloudxino_container_registry` data source: a Container Hub registry by `name` or `id`, with its
+  `endpoint` (the image prefix), `region`, `status` and `project_id`.
+
+Uses cloudxino-go v0.1.6 (`ContainerHosts.SetRegistries` and the `Registries` service).
+
 ## 0.1.5 (November 20, 2026)
 
 Features:

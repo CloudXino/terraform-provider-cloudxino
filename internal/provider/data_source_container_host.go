@@ -20,7 +20,9 @@ type containerHostDSModel struct {
 	Region         types.String `tfsdk:"region"`
 	ProjectID      types.String `tfsdk:"project_id"`
 	Status         types.String `tfsdk:"status"`
+	IPType         types.String `tfsdk:"ip_type"`
 	IPAddress      types.String `tfsdk:"ip_address"`
+	IngressIP      types.String `tfsdk:"ingress_ip"`
 	PortainerURL   types.String `tfsdk:"portainer_url"`
 	Compose        types.String `tfsdk:"compose"`
 	EnvKeys        types.List   `tfsdk:"env_keys"`
@@ -44,7 +46,9 @@ func (d *containerHostDataSource) Schema(_ context.Context, _ datasource.SchemaR
 			"region":        schema.StringAttribute{Computed: true},
 			"project_id":    schema.StringAttribute{Computed: true},
 			"status":        schema.StringAttribute{Computed: true, Description: "`creating`, `installing`, `ready`, `failed`, `deleting` or `deleted`."},
-			"ip_address":    schema.StringAttribute{Computed: true, Description: "Public IPv4 address; point domains' A records here."},
+			"ip_type":       schema.StringAttribute{Computed: true, Description: "`public` or `nat`."},
+			"ip_address":    schema.StringAttribute{Computed: true, Description: "The server's IPv4 address (172.16.x for a NAT host)."},
+			"ingress_ip":    schema.StringAttribute{Computed: true, Description: "Point domains' A records here: the server's IP, or the NAT web proxy's for a NAT host."},
 			"portainer_url": schema.StringAttribute{Computed: true},
 			"compose":       schema.StringAttribute{Computed: true, Description: "The saved `docker-compose.yml`; null before the first."},
 			"env_keys": schema.ListAttribute{
@@ -109,6 +113,7 @@ func (d *containerHostDataSource) Read(ctx context.Context, req datasource.ReadR
 	m.ID, m.Name, m.Plan = types.StringValue(h.Id), types.StringValue(h.Name), types.StringValue(h.Plan)
 	m.Region, m.ProjectID, m.Status = types.StringValue(h.Server.Region), types.StringValue(h.ProjectId), types.StringValue(h.Status)
 	m.IPAddress, m.PortainerURL = types.StringValue(h.Server.IpAddress), types.StringValue(h.PortainerUrl)
+	m.IPType, m.IngressIP = types.StringValue(ipTypeOf(h)), types.StringValue(ingressIPOf(h))
 	m.Compose = strValue(h.Compose)
 	m.EnvKeys = listOf(&h.EnvKeys)
 	m.Domains = domainsList(h.Domains)
@@ -134,6 +139,7 @@ type containerPlanModel struct {
 	FeePerMonth    types.Float64 `tfsdk:"fee_per_month"`
 	PerMonth       types.Float64 `tfsdk:"per_month"`
 	PerHour        types.Float64 `tfsdk:"per_hour"`
+	NatPerMonth    types.Float64 `tfsdk:"nat_per_month"`
 }
 
 func newContainerHostPlansDataSource() datasource.DataSource { return &containerHostPlansDataSource{} }
@@ -158,6 +164,8 @@ func (d *containerHostPlansDataSource) Schema(_ context.Context, _ datasource.Sc
 					"fee_per_month":    schema.Float64Attribute{Computed: true, Description: "The management fee (BDT)."},
 					"per_month":        schema.Float64Attribute{Computed: true, Description: "Server plus fee (BDT)."},
 					"per_hour":         schema.Float64Attribute{Computed: true, Description: "Server plus fee per hour (BDT)."},
+					"nat_per_month": schema.Float64Attribute{Computed: true,
+						Description: "Server plus fee for a NAT host (`ip_type = \"nat\"`, no public IP) (BDT); 0 when the API does not say."},
 				}},
 			},
 		},
@@ -176,6 +184,7 @@ func (d *containerHostPlansDataSource) Read(ctx context.Context, _ datasource.Re
 			Slug: types.StringValue(p.Slug), CPU: types.Int64Value(int64(p.Cpu)), MemoryGB: types.Float64Value(p.MemoryGb),
 			DiskGB: types.Int64Value(int64(p.DiskGb)), ServerPerMonth: types.Float64Value(p.ServerPerMonth),
 			FeePerMonth: types.Float64Value(p.FeePerMonth), PerMonth: types.Float64Value(p.PerMonth), PerHour: types.Float64Value(p.PerHour),
+			NatPerMonth: types.Float64Value(p.NatPerMonth),
 		})
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, m)...)

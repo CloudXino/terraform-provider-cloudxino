@@ -58,7 +58,7 @@ resource "cloudxino_dns_record" "app" {
   zone_id = data.cloudxino_dns_zone.zone.id
   type    = "A"
   name    = trimsuffix(var.domain, ".${var.zone}")
-  content = cloudxino_container_host.demo.ip_address
+  content = cloudxino_container_host.demo.ingress_ip
   ttl     = 300
 }
 

@@ -36,9 +36,22 @@ resource "cloudxino_container_host" "apps" {
   }
 }
 
-# Point the domain's A record at the host so Let's Encrypt can issue its certificate.
-output "ip_address" {
-  value = cloudxino_container_host.apps.ip_address
+# Point the domain's A record here so Let's Encrypt can issue its certificate: the host's own IP,
+# or the shared NAT web proxy's IP for a host with ip_type = "nat".
+output "ingress_ip" {
+  value = cloudxino_container_host.apps.ingress_ip
+}
+
+# A NAT host: no public IP (lower price); its domains reach it on 80/443 through the NAT web proxy.
+resource "cloudxino_container_host" "nat" {
+  name    = "apps-nat"
+  plan    = "s-2vcpu-4gb"
+  ip_type = "nat"
+  compose = file("${path.module}/docker-compose.yml")
+
+  domains = [
+    { domain = "shop.example.com", service = "web", port = 8080 },
+  ]
 }
 ```
 
@@ -53,8 +66,9 @@ output "ip_address" {
 ### Optional
 
 - `compose` (String) The `docker-compose.yml` to deploy, e.g. `file("docker-compose.yml")`. Ports 80 and 443 belong to Traefik: publish services through `domains` instead. Left out = not managed by Terraform.
-- `domains` (Attributes List) Domains served over HTTPS by Traefik, each routed to a compose service's port. Each domain's A record must point at `ip_address` for its certificate to be issued. Replaces all of the host's domains; `[]` removes them. Left out = not managed by Terraform. (see [below for nested schema](#nestedatt--domains))
+- `domains` (Attributes List) Domains served over HTTPS by Traefik, each routed to a compose service's port. Each domain's A record must point at `ingress_ip` for its certificate to be issued. Replaces all of the host's domains; `[]` removes them. Left out = not managed by Terraform. (see [below for nested schema](#nestedatt--domains))
 - `env` (Map of String, Sensitive) Environment variables for every service (also usable as `${NAME}` in the compose file). Replaces all of the host's variables; kept encrypted by the API, and in the Terraform state. Left out = not managed by Terraform.
+- `ip_type` (String) `public` (default): the server gets its own IPv4. `nat`: no public IP (a lower price); the host's domains are reached on ports 80 and 443 through the shared NAT web proxy, so their A records point at `ingress_ip`, and a NAT host takes fewer domains (9 by default). Changing it replaces the host.
 - `project_id` (String) Left out = the team's default project. Changing it replaces the host (the API cannot move one).
 - `region` (String) Region ID; left out = the default region. Changing it replaces the host.
 - `registry_ids` (Set of String) Container Hub registries (IDs, e.g. from the `cloudxino_container_registry` data source) the host logs in to before every `docker compose pull`, so the compose file can use private images (`<endpoint>/<image>:<tag>`). Docker keeps one login per registry server: at most one registry per server. `[]` removes the logins. Left out = not managed by Terraform.
@@ -64,7 +78,8 @@ output "ip_address" {
 
 - `created_at` (String)
 - `id` (String) The ID of this resource.
-- `ip_address` (String) The host's public IPv4 address: point your domains' A records here.
+- `ingress_ip` (String) Point your domains' A records here: the server's own IP for a public host, the shared NAT web proxy's IP for a NAT host.
+- `ip_address` (String) The server's IPv4 address: public for `ip_type = "public"`, a private 172.16.x address for `nat`.
 - `last_deployment` (Attributes) The newest deployment, whoever made it; null before the first. (see [below for nested schema](#nestedatt--last_deployment))
 - `portainer_url` (String) Portainer's address. The first login is in the console (or `cxctl containers credentials`).
 - `status` (String) `creating`, `installing`, `ready`, `failed`, `deleting` or `deleted`.

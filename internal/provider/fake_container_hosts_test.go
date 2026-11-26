@@ -94,10 +94,15 @@ func (f *fakeAPI) containerHosts(w http.ResponseWriter, r *http.Request, parts [
 			}
 			id := f.id("mcs")
 			ip := fmt.Sprintf("203.0.113.%d", 100+f.seq)
+			ipType, ingress, portainer := str("ip_type", "public"), ip, strings.ReplaceAll(ip, ".", "-")+".sslip.io"
+			if ipType == "nat" {
+				ip = fmt.Sprintf("172.16.0.%d", 100+f.seq)
+				ingress, portainer = "103.143.148.30", "mcs-"+id+".103-143-148-30.sslip.io"
+			}
 			h := map[string]any{"id": id, "name": body["name"], "plan": plan, "status": "creating", "error": nil,
-				"project_id": str("project_id", "p1"), "instance_id": "i-" + id,
+				"project_id": str("project_id", "p1"), "instance_id": "i-" + id, "ip_type": ipType, "ingress_ip": ingress,
 				"server":        map[string]any{"status": "creating", "ip_address": ip, "region": str("region", "dhaka-1"), "cpu": 2, "memory": 4096, "disk": 80},
-				"portainer_url": "https://" + strings.ReplaceAll(ip, ".", "-") + ".sslip.io", "domains": []any{}, "registry_ids": []any{},
+				"portainer_url": "https://" + portainer, "domains": []any{}, "registry_ids": []any{},
 				"compose": nil, "created_at": "2026-11-20T10:00:00+00:00"}
 			m.hosts[id] = h
 			m.env[id] = map[string]string{}
